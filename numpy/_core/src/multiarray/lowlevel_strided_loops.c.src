@@ -501,18 +501,18 @@ PyArray_GetStridedCopyFn(int aligned, npy_intp src_stride,
 
                 return &_strided_to_strided;
             }
-        }
-        else {
-            /* general src, dst */
-            switch (itemsize) {
-                case 1:
-                    return &_aligned_strided_to_strided_size1;
+            else {
+                /* general src, dst */
+                switch (itemsize) {
+                    case 1:
+                        return &_aligned_strided_to_strided_size1;
 /**begin repeat
  * #elsize = 2, 4, 8, 16#
  */
-                case @elsize@:
-                    return &_strided_to_strided_size@elsize@;
+                    case @elsize@:
+                        return &_strided_to_strided_size@elsize@;
 /**end repeat**/
+                }
             }
         }
     }
