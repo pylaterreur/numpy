@@ -38,6 +38,27 @@
 
 #include "stringdtype/dtype.h"
 
+/*
+ * Wrap an index into [0, max_item) for mode="wrap", max_item must be
+ * positive.  The unsigned comparisons check both bounds at once.  An index
+ * less than one period out of bounds (like -1) only needs an addition or
+ * a subtraction, and only indices further out need the slow division.
+ */
+static inline npy_intp
+wrap_index(npy_intp index, npy_intp max_item)
+{
+    if (NPY_UNLIKELY((npy_uintp)index >= (npy_uintp)max_item)) {
+        index = index < 0 ? index + max_item : index - max_item;
+        if (NPY_UNLIKELY((npy_uintp)index >= (npy_uintp)max_item)) {
+            index %= max_item;
+            if (index < 0) {
+                index += max_item;
+            }
+        }
+    }
+    return index;
+}
+
 static NPY_GCC_OPT_3 inline int
 npy_fasttake_impl(
         char *dest, char *src, const npy_intp *indices,
@@ -98,17 +119,7 @@ npy_fasttake_impl(
         case NPY_WRAP:
             for (npy_intp i = 0; i < n; i++) {
                 for (npy_intp j = 0; j < m; j++) {
-                    npy_intp tmp = indices[j];
-                    if (tmp < 0) {
-                        while (tmp < 0) {
-                            tmp += max_item;
-                        }
-                    }
-                    else if (tmp >= max_item) {
-                        while (tmp >= max_item) {
-                            tmp -= max_item;
-                        }
-                    }
+                    npy_intp tmp = wrap_index(indices[j], max_item);
                     char *tmp_src = src + tmp * chunk;
                     if (needs_refcounting) {
                         char *data[2] = {tmp_src, dest};
@@ -505,16 +516,7 @@ PyArray_PutTo(PyArrayObject *self, PyObject* values0, PyObject *indices0,
             for (i = 0; i < ni; i++) {
                 src = PyArray_BYTES(values) + itemsize * (i % nv);
                 tmp = ((npy_intp *)(PyArray_DATA(indices)))[i];
-                if (tmp < 0) {
-                    while (tmp < 0) {
-                        tmp += max_item;
-                    }
-                }
-                else if (tmp >= max_item) {
-                    while (tmp >= max_item) {
-                        tmp -= max_item;
-                    }
-                }
+                tmp = wrap_index(tmp, max_item);
                 char *data[2] = {src, dest + tmp*itemsize};
                 if (cast_info.func(
                         &cast_info.context, data, &one, strides,
@@ -561,16 +563,7 @@ PyArray_PutTo(PyArrayObject *self, PyObject* values0, PyObject *indices0,
             for (i = 0; i < ni; i++) {
                 src = PyArray_BYTES(values) + itemsize * (i % nv);
                 tmp = ((npy_intp *)(PyArray_DATA(indices)))[i];
-                if (tmp < 0) {
-                    while (tmp < 0) {
-                        tmp += max_item;
-                    }
-                }
-                else if (tmp >= max_item) {
-                    while (tmp >= max_item) {
-                        tmp -= max_item;
-                    }
-                }
+                tmp = wrap_index(tmp, max_item);
                 memmove(dest + tmp * itemsize, src, itemsize);
             }
             break;
@@ -1177,16 +1170,7 @@ PyArray_Choose(PyArrayObject *ip, PyObject *op, PyArrayObject *out,
                         "array");
                 goto fail;
             case NPY_WRAP:
-                if (mi < 0) {
-                    while (mi < 0) {
-                        mi += n;
-                    }
-                }
-                else {
-                    while (mi >= n) {
-                        mi -= n;
-                    }
-                }
+                mi = wrap_index(mi, n);
                 break;
             case NPY_CLIP:
                 if (mi < 0) {

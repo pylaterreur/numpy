@@ -6515,6 +6515,18 @@ class TestTake:
         assert_array_equal(x.take([2], axis=0, mode='wrap')[0], x[0])
         assert_array_equal(x.take([3], axis=0, mode='wrap')[0], x[1])
 
+    @pytest.mark.parametrize('dtype', (np.int64, object))
+    def test_wrap_large_indices(self, dtype):
+        # gh-11677: wrapping used to take abs(index) / n steps
+        x = np.arange(24, dtype=dtype).reshape((1, 2, 3, 4))
+        imin, imax = np.iinfo(np.intp).min, np.iinfo(np.intp).max
+        for axis, n in enumerate(x.shape):
+            ind = np.array([imin, imin + 1, -10**9 - 1, -2 * n - 1, -n - 1,
+                            -n, -1, 0, n - 1, n, 2 * n - 1, 2 * n,
+                            10**9 + 1, imax - 1, imax], dtype=np.intp)
+            res = x.take(ind, axis=axis, mode='wrap')
+            assert_array_equal(res, x.take(ind % n, axis=axis))
+
     @pytest.mark.parametrize('dtype', (np.float64, object))
     @pytest.mark.parametrize('shape, axis',
                              [((0, 0), 0), ((3, 0, 0), 1), ((0, 2, 0), 0)])
@@ -9001,6 +9013,17 @@ class TestChoose:
         out = np.choose(indices, choices)
         assert_equal(out, tgt)
         assert_equal(out.dtype, tgt.dtype)
+
+    @pytest.mark.parametrize("dtype", [np.intp, object])
+    def test_wrap_large_indices(self, dtype):
+        # gh-11677: wrapping used to take abs(index) / n steps
+        n = 3
+        imin, imax = np.iinfo(np.intp).min, np.iinfo(np.intp).max
+        ind = np.array([imin, imin + 1, -10**9 - 1, -n - 1, -n, -1, 0,
+                        n - 1, n, 2 * n, 10**9 + 1, imax - 1, imax],
+                       dtype=np.intp)
+        choices = np.arange(n, dtype=dtype)
+        assert_equal(np.choose(ind, choices, mode='wrap'), ind % n)
 
     def test_dimension_and_args_limit(self):
         # Maxdims for the legacy iterator is 32, but the maximum number

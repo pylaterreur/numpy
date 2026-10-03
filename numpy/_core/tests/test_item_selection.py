@@ -188,3 +188,18 @@ class TestPut:
         indices = np.array([0, 2, 4], dtype=indices_type)
         np.put(x, indices, [1, 2, 3])
         assert_array_equal(x, np.array([1, 0, 2, 0, 3], dtype=array_type))
+
+    @pytest.mark.parametrize("dtype", [np.int64, object])
+    def test_wrap_large_indices(self, dtype):
+        # gh-11677: wrapping used to take abs(index) / n steps
+        n = 7
+        imin, imax = np.iinfo(np.intp).min, np.iinfo(np.intp).max
+        indices = np.array([imin, imin + 1, -10**9 - 1, -n - 1, -n, -1, 0,
+                            n - 1, n, 2 * n, 10**9 + 1, imax - 1, imax],
+                           dtype=np.intp)
+        for index in indices:
+            x = np.zeros(n, dtype=dtype)
+            np.put(x, [index], 1, mode="wrap")
+            expected = np.zeros(n, dtype=dtype)
+            expected[index % n] = 1
+            assert_array_equal(x, expected)
