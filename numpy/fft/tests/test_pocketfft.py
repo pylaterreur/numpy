@@ -459,18 +459,44 @@ class TestFFT1D:
 
     @pytest.mark.parametrize("fft", [np.fft.fftn, np.fft.ifftn, np.fft.rfftn])
     def test_fftn_out_and_s_interaction(self, fft):
-        # With s, shape varies, so generally one cannot pass in out.
+        # With s, the shape of the result varies, and out must match it.
         if fft is np.fft.rfftn:
             x = random((10, 5, 6))
         else:
             x = random((10, 5, 6)) + 1j * random((10, 5, 6))
         with pytest.raises(ValueError, match="has wrong shape"):
             fft(x, out=np.zeros_like(x), s=(3, 3, 3), axes=(0, 1, 2))
-        # Except on the first axis done (which is the last of axes).
+        # Changing only the length of the first axis done (the last of axes).
         s = (10, 5, 5)
         expected = fft(x, s=s, axes=(0, 1, 2))
         out = np.zeros_like(expected)
         result = fft(x, s=s, axes=(0, 1, 2), out=out)
+        assert result is out
+        assert_array_equal(result, expected)
+
+    @pytest.mark.parametrize("fft", [np.fft.fftn, np.fft.ifftn, np.fft.rfftn,
+                                     np.fft.fft2, np.fft.ifft2, np.fft.rfft2])
+    @pytest.mark.parametrize(("s", "axes"), [
+        ((7, 8, 9), (0, 1, 2)),
+        ((12, 3, 6), (0, 1, 2)),
+        ((4, 5, 6), (0, 1, 2)),
+        ((10, 7, 3), (0, 1, 2)),
+        ((10, 3, 6), (0, 1, 2)),
+        ((8, 3), (2, 0)),
+        ((3, 7, 9), (-1, 0, 1)),
+        ((4, 7, 9), (1, 2, 1)),
+    ])
+    def test_fftn_out_and_s_interaction2(self, fft, s, axes):
+        # Any s can be combined with an out of the shape of the result,
+        # even if s changes the shape of the intermediate results (gh-28890).
+        if fft in (np.fft.rfftn, np.fft.rfft2):
+            x = random((10, 5, 6))
+        else:
+            x = random((10, 5, 6)) + 1j * random((10, 5, 6))
+        x.flags.writeable = False
+        expected = fft(x, s=s, axes=axes)
+        out = np.zeros_like(expected)
+        result = fft(x, s=s, axes=axes, out=out)
         assert result is out
         assert_array_equal(result, expected)
 
