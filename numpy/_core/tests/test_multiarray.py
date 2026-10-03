@@ -7230,6 +7230,38 @@ class TestFlat:
         b.flat = a
         assert_array_equal(b, a)
 
+    @pytest.mark.parametrize("index", [
+        slice(None), ..., [0, 1, 2, 3, 4, 5], np.ones(6, dtype=bool)])
+    def test_assign_overlapping_values(self, index):
+        # gh-25096: values sharing memory with the array must be read
+        # before any element is written
+        a = np.arange(6)
+        a.flat[index] = a[::-1]
+        assert_array_equal(a, [5, 4, 3, 2, 1, 0])
+
+    def test_assign_overlapping_views(self):
+        a = np.arange(8)
+        a.flat[1:] = a[:-1]
+        assert_array_equal(a, [0, 0, 1, 2, 3, 4, 5, 6])
+
+        a = np.arange(6).reshape(2, 3)
+        a.flat[:] = a.T
+        assert_array_equal(a, [[0, 3, 1], [4, 2, 5]])
+
+        a = np.array([1, "x", None, 2.5], dtype=object)
+        a.flat[::-1] = a
+        assert_array_equal(a, [2.5, None, "x", 1])
+
+    def test_set_overlapping_values(self):
+        # gh-25096, but with the `flat` attribute setter
+        a = np.arange(6).reshape(2, 3)
+        a.flat = a.T
+        assert_array_equal(a, [[0, 3, 1], [4, 2, 5]])
+
+        a = np.arange(6)
+        a.flat = a[1:]  # the values are repeated
+        assert_array_equal(a, [1, 2, 3, 4, 5, 1])
+
     def test___array__(self):
         a0 = np.arange(20.0)
         a = a0.reshape(4, 5)

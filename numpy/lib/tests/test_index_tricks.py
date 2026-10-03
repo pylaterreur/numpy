@@ -498,6 +498,17 @@ class TestFillDiagonal:
         i = np.array([0, 1, 2])
         assert_equal(np.where(a != 0), (i, i, i, i))
 
+    def test_overlapping_values(self):
+        # gh-25096: `val` may be a view of `a`
+        a = np.arange(4).reshape(2, 2)
+        fill_diagonal(a, np.flip(np.diag(a)))
+        assert_array_equal(a, [[3, 1], [2, 0]])
+
+        # flip the anti-diagonal through a non-contiguous view
+        a = np.fliplr(np.diag([1, 2, 3, 4, 5]))
+        fill_diagonal(np.fliplr(a), np.diag(np.flip(np.fliplr(a))))
+        assert_array_equal(a, np.fliplr(np.diag([5, 4, 3, 2, 1])))
+
     def test_low_dim_handling(self):
         # raise error with low dimensionality
         a = np.zeros(3, int)

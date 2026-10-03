@@ -663,6 +663,16 @@ array_flat_set(PyArrayObject *self, PyObject *val, void *NPY_UNUSED(ignored))
     if (arr == NULL) {
         return -1;
     }
+    /*
+     * The values are read while the array is written, so copy them (in
+     * the C order they are read in) if they may share memory with it.
+     */
+    if (solve_may_share_memory(self, arr, 1) != 0) {
+        Py_SETREF(arr, (PyArrayObject *)PyArray_NewCopy(arr, NPY_CORDER));
+        if (arr == NULL) {
+            return -1;
+        }
+    }
     arrit = (PyArrayIterObject *)PyArray_IterNew((PyObject *)arr);
     if (arrit == NULL) {
         goto exit;

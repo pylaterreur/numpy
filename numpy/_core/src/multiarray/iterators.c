@@ -863,6 +863,17 @@ iter_ass_subscript(PyArrayIterObject *self, PyObject *ind, PyObject *val)
     if (arrval == NULL) {
         goto finish;
     }
+    /*
+     * The values are read while the array is written, so copy them (in
+     * the C order they are read in) if they may share memory with it.
+     */
+    if (solve_may_share_memory(self->ao, arrval, 1) != 0) {
+        Py_SETREF(arrval,
+                  (PyArrayObject *)PyArray_NewCopy(arrval, NPY_CORDER));
+        if (arrval == NULL) {
+            goto finish;
+        }
+    }
     val_it = (PyArrayIterObject *)PyArray_IterNew((PyObject *)arrval);
     if (val_it == NULL) {
         goto finish;
