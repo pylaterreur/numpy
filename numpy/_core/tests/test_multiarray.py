@@ -11138,6 +11138,18 @@ class TestArange:
             np.arange, 0, np.inf
         )
 
+    @pytest.mark.parametrize("args", [
+        (2.0**63,),
+        (0.0, 2.0**63),
+        (-2.0**62, 2.0**62),
+        (0.0, -2.0**63, -1.0),
+    ])
+    def test_length_overflow(self, args):
+        # A length of 2**63 passed the overflow check, as it is equal to
+        # (double)NPY_MAX_INTP, and then gave an empty array (gh-16426)
+        with pytest.raises(ValueError, match="Maximum allowed size exceeded"):
+            np.arange(*args)
+
     def test_nan_step(self):
         assert_raises_regex(
             ValueError, "cannot compute length",

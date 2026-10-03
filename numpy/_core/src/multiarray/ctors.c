@@ -3092,7 +3092,11 @@ _arange_safe_ceil_to_intp(double value)
             "arange: cannot compute length");
         return -1;
     }
-    if (!((double)NPY_MIN_INTP <= ivalue && ivalue <= (double)NPY_MAX_INTP)) {
+    /*
+     * The upper bound is exclusive: (double)NPY_MAX_INTP rounds up to
+     * 2**63 on 64-bit platforms, which does not fit in an npy_intp.
+     */
+    if (!((double)NPY_MIN_INTP <= ivalue && ivalue < -(double)NPY_MIN_INTP)) {
         PyErr_SetString(PyExc_OverflowError,
                 "arange: overflow while computing length");
         return -1;
