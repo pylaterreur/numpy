@@ -344,7 +344,13 @@ PyArray_TakeFrom(PyArrayObject *self0, PyObject *indices0, int axis,
     needs_refcounting = PyDataType_REFCHK(PyArray_DESCR(self));
     npy_intp *indices_data = (npy_intp *)PyArray_DATA(indices);
 
-    if ((max_item == 0) && (PyArray_SIZE(obj) != 0)) {
+    /*
+     * Wrap mode also needs this check when the result is empty only because
+     * of a trailing dimension: it would still wrap indices into the empty
+     * axis (gh-11677).
+     */
+    if (max_item == 0 && (PyArray_SIZE(obj) != 0 ||
+            (clipmode == NPY_WRAP && n != 0 && m != 0))) {
         /* Index error, since that is the usual error for raise mode */
         PyErr_SetString(PyExc_IndexError,
                     "cannot do a non-empty take from an empty axes.");

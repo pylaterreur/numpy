@@ -6515,6 +6515,23 @@ class TestTake:
         assert_array_equal(x.take([2], axis=0, mode='wrap')[0], x[0])
         assert_array_equal(x.take([3], axis=0, mode='wrap')[0], x[1])
 
+    @pytest.mark.parametrize('dtype', (np.float64, object))
+    @pytest.mark.parametrize('shape, axis',
+                             [((0, 0), 0), ((3, 0, 0), 1), ((0, 2, 0), 0)])
+    def test_wrap_empty_axis(self, shape, axis, dtype):
+        # gh-11677: wrap mode looped forever when the indices were not
+        # empty but a trailing dimension made the result empty
+        x = np.empty(shape, dtype=dtype)
+        msg = "cannot do a non-empty take from an empty axes"
+        for ind in (0, 1, -1, [0, 3]):
+            with pytest.raises(IndexError, match=msg):
+                x.take(ind, axis=axis, mode='wrap')
+        out = np.empty(shape[:axis] + (1,) + shape[axis + 1:], dtype=dtype)
+        with pytest.raises(IndexError, match=msg):
+            x.take([1], axis=axis, mode='wrap', out=out)
+        res = x.take(np.array([], dtype=np.intp), axis=axis, mode='wrap')
+        assert res.shape == shape
+
     @pytest.mark.parametrize('dtype', ('>i4', '<i4'))
     def test_byteorder(self, dtype):
         x = np.array([1, 2, 3], dtype)
