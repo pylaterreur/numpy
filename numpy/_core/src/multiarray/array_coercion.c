@@ -509,7 +509,8 @@ PyArray_Pack(PyArray_Descr *descr, void *item, PyObject *value)
         Py_DECREF(DType);
 
         PyArrayObject *arr = (PyArrayObject *)value;
-        if (PyArray_DESCR(arr) == descr && !PyDataType_REFCHK(descr)) {
+        if (PyArray_DESCR(arr) == descr &&
+                PyDataType_ISTRIVIALLYCOPYABLE(descr)) {
             /* light-weight fast-path for when the descrs obviously matches */
             memcpy(item, PyArray_BYTES(arr), descr->elsize);
             return 0;  /* success (it was an array-like) */

@@ -1835,8 +1835,18 @@ mapiter_trivial_@name@(
     itersize = PyArray_SIZE(ind);
 #endif
 
-    /* Optimization for aligned types that do not need the api */
-    switch ((is_aligned && !needs_api) ? itemsize : 0) {
+    /*
+     * Optimization for aligned types that do not need the api.  Setting may
+     * only copy whole items if the dtype is trivially copyable: the holes
+     * (bytes outside of all fields) of a structured dtype can belong to other
+     * data (gh-29720).  Getting always fills a new array.
+     */
+#if @isget@
+    int copy_items = 1;
+#else
+    int copy_items = PyDataType_ISTRIVIALLYCOPYABLE(PyArray_DESCR(self));
+#endif
+    switch ((is_aligned && !needs_api && copy_items) ? itemsize : 0) {
 
 /**begin repeat1
  * #elsize = 1, 2, 4, 8, 16, 0#
@@ -1957,6 +1967,12 @@ mapiter_@name@(
         npy_intp itemsize = PyArray_ITEMSIZE(array);
         npy_intp strides[2] = {itemsize, itemsize};
         npy_intp one = 1;
+        /* Setting must not overwrite holes, see `mapiter_trivial_set` */
+#if @isget@
+        int copy_items = 1;
+#else
+        int copy_items = PyDataType_ISTRIVIALLYCOPYABLE(PyArray_DESCR(array));
+#endif
 
         /* We have only one iterator handling everything */
         counter = NpyIter_GetInnerLoopSizePtr(mit->outer);
@@ -1979,7 +1995,7 @@ mapiter_@name@(
             }
 
             /* Optimization for aligned types that do not need the api */
-            switch ((is_aligned && !needs_api) ? itemsize : 0) {
+            switch ((is_aligned && !needs_api && copy_items) ? itemsize : 0) {
 
 /**begin repeat2
  * #elsize = 1, 2, 4, 8, 16, 0#

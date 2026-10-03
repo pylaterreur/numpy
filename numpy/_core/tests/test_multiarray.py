@@ -1778,6 +1778,47 @@ class TestStructured:
         a[['a', 'b']] = a[['b', 'a']]
         assert_equal(a[0].item(), (2, 1))
 
+    @pytest.mark.parametrize("dtype", [
+        np.dtype({"names": ["f1"], "formats": ["u1"], "offsets": [1],
+                  "itemsize": 4}),
+        np.dtype("i8,i8")[["f1"]],
+    ], ids=["offsets", "field-subset"])
+    @pytest.mark.parametrize("assign", [
+        pytest.param(lambda a, v: operator.setitem(a, 1, v), id="int"),
+        pytest.param(lambda a, v: _multiarray_tests.array_indexing(1, a, 1, v),
+                     id="int-capi"),
+        pytest.param(lambda a, v: operator.setitem(a.flat, 1, v), id="flat"),
+        pytest.param(lambda a, v: operator.setitem(a, [1], v), id="fancy"),
+        pytest.param(lambda a, v: operator.setitem(a, [1], v[()]),
+                     id="fancy-void"),
+        pytest.param(lambda a, v: operator.setitem(a, [1], v[None]),
+                     id="fancy-array"),
+        pytest.param(lambda a, v: operator.setitem(a, np.array([1], np.int16), v),
+                     id="fancy-int16"),
+        pytest.param(lambda a, v: operator.setitem(a[None], ([0], [1]), v),
+                     id="fancy-2d"),
+        pytest.param(lambda a, v: operator.setitem(a[None], ([0], [1]), v[None]),
+                     id="fancy-2d-array"),
+        pytest.param(lambda a, v: operator.setitem(a, slice(1, 2), [v]),
+                     id="sequence"),
+        # these paths already assigned field by field:
+        pytest.param(lambda a, v: operator.setitem(a, slice(1, 2), v),
+                     id="slice"),
+        pytest.param(lambda a, v: operator.setitem(a, (1, ...), v), id="0d"),
+        pytest.param(lambda a, v: operator.setitem(a, 1, v[()]), id="void"),
+    ])
+    def test_assignment_preserves_holes(self, dtype, assign):
+        # gh-29720: assignment must only write to the fields.  The bytes
+        # between them (holes) may belong to other data, here the rest of `raw`.
+        raw = np.arange(3 * dtype.itemsize, dtype=np.uint8)
+        value = np.full(dtype.itemsize, 0xff, dtype=np.uint8).view(dtype)
+        value["f1"] = 3
+        expected = raw.copy()
+        expected.view(dtype)["f1"][1] = 3
+
+        assign(raw.view(dtype), value.reshape(()))
+        assert_array_equal(raw, expected)
+
     def test_structuredscalar_indexing(self):
         # test gh-7262
         x = np.empty(shape=1, dtype="(2,)3S,(2,)3U")
