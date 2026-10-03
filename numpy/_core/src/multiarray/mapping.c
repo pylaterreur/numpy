@@ -1228,13 +1228,20 @@ array_assign_boolean_subscript(PyArrayObject *self,
             return -1;
         }
 
+        /*
+         * The iterator does not buffer, so only the cast can set floating
+         * point errors.  Check its flags before combining them with those
+         * of the iterator, which never include NO_FLOATINGPOINT_ERRORS
+         * when it does not buffer.
+         */
+        int check_fpe = !(cast_flags & NPY_METH_NO_FLOATINGPOINT_ERRORS);
         cast_flags = PyArrayMethod_COMBINED_FLAGS(
                 cast_flags, NpyIter_GetTransferFlags(iter));
 
         if (!(cast_flags & NPY_METH_REQUIRES_PYAPI)) {
             NPY_BEGIN_THREADS_THRESHOLDED(NpyIter_GetIterSize(iter));
         }
-        if (!(flags & NPY_METH_NO_FLOATINGPOINT_ERRORS)) {
+        if (check_fpe) {
             npy_clear_floatstatus_barrier((char *)self);
         }
 
@@ -1275,7 +1282,7 @@ array_assign_boolean_subscript(PyArrayObject *self,
         if (!NpyIter_Deallocate(iter)) {
             res = -1;
         }
-        if (res == 0 && !(flags & NPY_METH_NO_FLOATINGPOINT_ERRORS)) {
+        if (res == 0 && check_fpe) {
             int fpes = npy_get_floatstatus_barrier((char *)self);
             if (fpes && PyUFunc_GiveFloatingpointErrors("cast", fpes) < 0) {
                 return -1;
