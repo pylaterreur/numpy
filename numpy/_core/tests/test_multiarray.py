@@ -7965,6 +7965,20 @@ class TestStats:
         with pytest.warns(RuntimeWarning) as w:
             assert_equal(np.std(a, where=False), np.nan)
 
+    @pytest.mark.parametrize("func", [_var, _std])
+    @pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+    def test_var_std_where_excluded_values(self, func, dtype):
+        # Elements excluded by where are not used in any computation, so
+        # they cannot cause floating point errors (gh-20493).
+        a = np.array([1., 2., 3., 1e300, -np.inf, np.nan], dtype=dtype)
+        where = np.array([True, True, True, False, False, False])
+        expected = func(a[:3])
+        with np.errstate(all="raise"):
+            assert_equal(func(a, where=where), expected)
+            b = np.stack([a, a[::-1]])
+            res = func(b, axis=1, where=np.stack([where, where[::-1]]))
+        assert_equal(res, [expected, expected])
+
     def test_subclass(self):
         class TestArray(np.ndarray):
             def __new__(cls, data, info):

@@ -197,7 +197,25 @@ def _var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, *,
     # Compute sum of squared deviations from mean
     # Note that x may not be inexact and that we need it to be an array,
     # not a scalar.
-    x = um.subtract(arr, arrmean, out=...)
+    if where is True:
+        x = um.subtract(arr, arrmean, out=...)
+    else:
+        # Only compute the deviations of the included elements, as the others
+        # can be anything (gh-20493). Set those to zero instead, so that the
+        # computations below need no mask (masked loops are much slower).
+        try:
+            x_dtype = mu.result_type(arr, arrmean)
+        except TypeError:  # e.g., mean given as a list
+            x = um.subtract(arr, arrmean, out=..., where=False)
+            x.fill(0)
+        else:
+            if type(arr) is mu.ndarray:  # calloc'd zeros are cheapest
+                x = mu.zeros(arr.shape, dtype=x_dtype,
+                             order='F' if arr.flags.fnc else 'C')
+            else:  # keep the subclass
+                x = mu.empty_like(arr, dtype=x_dtype)
+                x.fill(0)
+        um.subtract(arr, arrmean, out=x, where=where)
     if issubclass(arr.dtype.type, (nt.floating, nt.integer)):
         x = um.square(x, out=x)
     # Fast-paths for built-in complex types
@@ -210,7 +228,7 @@ def _var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, *,
     else:
         x = um.multiply(x, um.conjugate(x), out=x).real
 
-    ret = umr_sum(x, axis, dtype, out, keepdims=keepdims, where=where)
+    ret = umr_sum(x, axis, dtype, out, keepdims=keepdims)
 
     # Compute degrees of freedom and make sure it is not negative.
     rcount = um.maximum(rcount - ddof, 0)
