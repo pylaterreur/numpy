@@ -43,7 +43,7 @@ npy_fasttake_impl(
         char *dest, char *src, const npy_intp *indices,
         npy_intp n, npy_intp m, npy_intp max_item,
         npy_intp nelem, npy_intp chunk,
-        NPY_CLIPMODE clipmode, npy_intp itemsize, int needs_refcounting,
+        NPY_CLIPMODE clipmode, npy_intp itemsize, int needs_custom_copy,
         PyArray_Descr *src_dtype, PyArray_Descr *dst_dtype, int axis)
 {
     NPY_BEGIN_THREADS_DEF;
@@ -52,8 +52,8 @@ npy_fasttake_impl(
     NPY_ARRAYMETHOD_FLAGS flags;
     NPY_cast_info_init(&cast_info);
 
-    if (!needs_refcounting) {
-        /* if "refcounting" is not needed memcpy is safe for a simple copy  */
+    if (!needs_custom_copy) {
+        /* memcpy is safe for a simple copy, see `PyArray_TakeFrom` */
         NPY_BEGIN_THREADS;
     }
     else {
@@ -77,7 +77,7 @@ npy_fasttake_impl(
                         goto fail;
                     }
                     char *tmp_src = src + tmp * chunk;
-                    if (needs_refcounting) {
+                    if (needs_custom_copy) {
                         char *data[2] = {tmp_src, dest};
                         npy_intp strides[2] = {itemsize, itemsize};
                         if (cast_info.func(
@@ -110,7 +110,7 @@ npy_fasttake_impl(
                         }
                     }
                     char *tmp_src = src + tmp * chunk;
-                    if (needs_refcounting) {
+                    if (needs_custom_copy) {
                         char *data[2] = {tmp_src, dest};
                         npy_intp strides[2] = {itemsize, itemsize};
                         if (cast_info.func(
@@ -139,7 +139,7 @@ npy_fasttake_impl(
                         tmp = max_item - 1;
                     }
                     char *tmp_src = src + tmp * chunk;
-                    if (needs_refcounting) {
+                    if (needs_custom_copy) {
                         char *data[2] = {tmp_src, dest};
                         npy_intp strides[2] = {itemsize, itemsize};
                         if (cast_info.func(
@@ -179,51 +179,51 @@ npy_fasttake(
         char *dest, char *src, const npy_intp *indices,
         npy_intp n, npy_intp m, npy_intp max_item,
         npy_intp nelem, npy_intp chunk,
-        NPY_CLIPMODE clipmode, npy_intp itemsize, int needs_refcounting,
+        NPY_CLIPMODE clipmode, npy_intp itemsize, int needs_custom_copy,
         PyArray_Descr *src_dtype, PyArray_Descr *dst_dtype, int axis)
 {
-    if (!needs_refcounting) {
+    if (!needs_custom_copy) {
         if (chunk == 1) {
             return npy_fasttake_impl(
                     dest, src, indices, n, m, max_item, nelem, chunk,
-                    clipmode, itemsize, needs_refcounting, src_dtype,
+                    clipmode, itemsize, needs_custom_copy, src_dtype,
                     dst_dtype, axis);
         }
         if (chunk == 2) {
             return npy_fasttake_impl(
                     dest, src, indices, n, m, max_item, nelem, chunk,
-                    clipmode, itemsize, needs_refcounting, src_dtype,
+                    clipmode, itemsize, needs_custom_copy, src_dtype,
                     dst_dtype, axis);
         }
         if (chunk == 4) {
             return npy_fasttake_impl(
                     dest, src, indices, n, m, max_item, nelem, chunk,
-                    clipmode, itemsize, needs_refcounting, src_dtype,
+                    clipmode, itemsize, needs_custom_copy, src_dtype,
                     dst_dtype, axis);
         }
         if (chunk == 8) {
             return npy_fasttake_impl(
                     dest, src, indices, n, m, max_item, nelem, chunk,
-                    clipmode, itemsize, needs_refcounting, src_dtype,
+                    clipmode, itemsize, needs_custom_copy, src_dtype,
                     dst_dtype, axis);
         }
         if (chunk == 16) {
             return npy_fasttake_impl(
                     dest, src, indices, n, m, max_item, nelem, chunk,
-                    clipmode, itemsize, needs_refcounting, src_dtype,
+                    clipmode, itemsize, needs_custom_copy, src_dtype,
                     dst_dtype, axis);
         }
         if (chunk == 32) {
             return npy_fasttake_impl(
                     dest, src, indices, n, m, max_item, nelem, chunk,
-                    clipmode, itemsize, needs_refcounting, src_dtype,
+                    clipmode, itemsize, needs_custom_copy, src_dtype,
                     dst_dtype, axis);
         }
     }
 
     return npy_fasttake_impl(
             dest, src, indices, n, m, max_item, nelem, chunk,
-            clipmode, itemsize, needs_refcounting, src_dtype,
+            clipmode, itemsize, needs_custom_copy, src_dtype,
             dst_dtype, axis);
 }
 
@@ -240,7 +240,7 @@ PyArray_TakeFrom(PyArrayObject *self0, PyObject *indices0, int axis,
     npy_intp nd, i, n, m, max_item, chunk, itemsize, nelem;
     npy_intp shape[NPY_MAXDIMS];
 
-    npy_bool needs_refcounting;
+    npy_bool needs_custom_copy;
 
     indices = NULL;
     self = (PyArrayObject *)PyArray_CheckAxis(self0, &axis,
@@ -341,7 +341,14 @@ PyArray_TakeFrom(PyArrayObject *self0, PyObject *indices0, int axis,
     char *dest = PyArray_DATA(obj);
     PyArray_Descr *src_descr = PyArray_DESCR(self);
     PyArray_Descr *dst_descr = PyArray_DESCR(obj);
-    needs_refcounting = PyDataType_REFCHK(PyArray_DESCR(self));
+    /*
+     * Items can be copied whole with memcpy unless the dtype has references,
+     * or `out` is written to directly and its dtype has holes (bytes outside
+     * of all fields), which may belong to other data (gh-29720).  The holes
+     * of a new array or of a temporary copy of `out` do not matter.
+     */
+    needs_custom_copy = PyDataType_REFCHK(src_descr) ||
+            (obj == out && !PyDataType_ISTRIVIALLYCOPYABLE(dst_descr));
     npy_intp *indices_data = (npy_intp *)PyArray_DATA(indices);
 
     if ((max_item == 0) && (PyArray_SIZE(obj) != 0)) {
@@ -353,7 +360,7 @@ PyArray_TakeFrom(PyArrayObject *self0, PyObject *indices0, int axis,
 
     if (npy_fasttake(
             dest, src, indices_data, n, m, max_item, nelem, chunk,
-            clipmode, itemsize, needs_refcounting, src_descr, dst_descr,
+            clipmode, itemsize, needs_custom_copy, src_descr, dst_descr,
             axis) < 0) {
         goto fail;
     }
@@ -454,10 +461,15 @@ PyArray_PutTo(PyArrayObject *self, PyObject* values0, PyObject *indices0,
     dest = PyArray_DATA(self);
     itemsize = PyArray_ITEMSIZE(self);
 
-    int has_references = PyDataType_REFCHK(PyArray_DESCR(self));
+    /*
+     * Items can be copied whole with memmove only if the dtype is trivially
+     * copyable: it must not have references, and the holes (bytes outside of
+     * all fields) of a structured dtype may belong to other data (gh-29720).
+     */
+    int needs_custom_copy =
+            !PyDataType_ISTRIVIALLYCOPYABLE(PyArray_DESCR(self));
 
-    if (!has_references) {
-        /* if has_references is not needed memcpy is safe for a simple copy  */
+    if (!needs_custom_copy) {
         NPY_BEGIN_THREADS_THRESHOLDED(ni);
     }
     else {
@@ -474,7 +486,7 @@ PyArray_PutTo(PyArrayObject *self, PyObject* values0, PyObject *indices0,
     }
 
 
-    if (has_references) {
+    if (needs_custom_copy) {
         const npy_intp one = 1;
         const npy_intp strides[2] = {itemsize, itemsize};
 
@@ -752,7 +764,8 @@ PyArray_PutMask(PyArrayObject *self, PyObject* values0, PyObject* mask0)
     itemsize = PyArray_ITEMSIZE(self);
     dest = PyArray_DATA(self);
 
-    if (PyDataType_REFCHK(PyArray_DESCR(self))) {
+    /* Copy whole items only if trivially copyable, see `PyArray_PutTo` */
+    if (!PyDataType_ISTRIVIALLYCOPYABLE(PyArray_DESCR(self))) {
         NPY_cast_info cast_info;
         NPY_ARRAYMETHOD_FLAGS flags;
         const npy_intp one = 1;

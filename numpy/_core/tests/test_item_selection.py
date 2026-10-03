@@ -188,3 +188,43 @@ class TestPut:
         indices = np.array([0, 2, 4], dtype=indices_type)
         np.put(x, indices, [1, 2, 3])
         assert_array_equal(x, np.array([1, 0, 2, 0, 3], dtype=array_type))
+
+
+@pytest.mark.parametrize("dtype", [
+    np.dtype({"names": ["f1"], "formats": ["u1"], "offsets": [1],
+              "itemsize": 4}),
+    np.dtype("i8,i8")[["f1"]],
+], ids=["offsets", "field-subset"])
+@pytest.mark.parametrize("func", [
+    pytest.param(lambda a, v: np.put(a, [3, 0], v), id="put"),
+    pytest.param(lambda a, v: np.put(a, [7, -4], v, mode="wrap"), id="put-wrap"),
+    pytest.param(lambda a, v: np.put(a, [9, -9], v, mode="clip"), id="put-clip"),
+    pytest.param(lambda a, v: np.put(a[::-1], [3, 0], v), id="put-reversed"),
+    pytest.param(lambda a, v: np.putmask(a, [1, 0, 0, 1], v), id="putmask"),
+    pytest.param(lambda a, v: np.putmask(a, [1, 0, 0, 1], v[:1]),
+                 id="putmask-scalar"),
+    pytest.param(lambda a, v: np.putmask(a[::-1], [1, 0, 0, 1], v),
+                 id="putmask-reversed"),
+    pytest.param(lambda a, v: np.take(v, [1, 0, 0, 1], out=a), id="take"),
+    pytest.param(lambda a, v: np.take(v, [3, -2, 2, -1], out=a, mode="wrap"),
+                 id="take-wrap"),
+    pytest.param(lambda a, v: np.take(v, [5, -1, 0, 1], out=a, mode="clip"),
+                 id="take-clip"),
+    pytest.param(lambda a, v: np.take(v[None], [3, -3], axis=0,
+                                      out=a.reshape(2, 2), mode="clip"),
+                 id="take-axis"),
+])
+def test_put_take_preserve_holes(dtype, func):
+    # gh-29720: only the fields may be written to.  The bytes between them
+    # (holes) may belong to other data, here to the rest of `raw`.
+    raw = np.arange(4 * dtype.itemsize, dtype=np.uint8)
+    values = np.full(2 * dtype.itemsize, 0xff, dtype=np.uint8).view(dtype)
+    values["f1"] = [3, 4]
+    # The fields must end up as if `func` operated on them alone
+    fields = raw.view(dtype)["f1"].copy()
+    func(fields, values["f1"])
+    expected = raw.copy()
+    expected.view(dtype)["f1"] = fields
+
+    func(raw.view(dtype), values)
+    assert_array_equal(raw, expected)
