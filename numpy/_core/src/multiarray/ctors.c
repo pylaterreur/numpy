@@ -3190,6 +3190,89 @@ PyArray_Arange(double start, double stop, double step, int type_num)
 }
 
 /*
+ * Python ints and NumPy integer scalars, but not bools (np.bool is not an
+ * integer type either) or timedelta64 (which has no __index__).
+ */
+static inline int
+arange_is_integer(PyObject *obj)
+{
+    if (PyLong_Check(obj)) {
+        return !PyBool_Check(obj);
+    }
+    if (PyFloat_CheckExact(obj)) {
+        /* Common, and quicker to rule out than with a subtype check */
+        return 0;
+    }
+    return (PyArray_IsScalar(obj, Integer) &&
+            !PyArray_IsScalar(obj, Timedelta));
+}
+
+
+/*
+ * Exact length of an arange of integers, like len(range(start, stop, step)).
+ * Returns -1 with an error set on failure (an OverflowError if the length
+ * does not fit in an npy_intp).
+ */
+static npy_intp
+arange_integer_length(PyObject *start, PyObject *stop, PyObject *step)
+{
+    npy_intp len = -1;
+    PyObject *istart = NULL, *istop = NULL, *istep = NULL;
+    PyObject *diff = NULL, *quot = NULL;
+    long long neg_len;
+    int overflow;
+
+    /*
+     * Use Python ints: arithmetic with NumPy integer scalars may overflow,
+     * or give floats for mixed signedness.
+     */
+    istart = PyNumber_Index(start);
+    if (istart == NULL) {
+        goto finish;
+    }
+    istop = PyNumber_Index(stop);
+    if (istop == NULL) {
+        goto finish;
+    }
+    istep = PyNumber_Index(step);
+    if (istep == NULL) {
+        goto finish;
+    }
+    /* ceil((stop - start) / step) == -((start - stop) // step) */
+    diff = PyNumber_Subtract(istart, istop);
+    if (diff == NULL) {
+        goto finish;
+    }
+    quot = PyNumber_FloorDivide(diff, istep);
+    if (quot == NULL) {
+        goto finish;
+    }
+    neg_len = PyLong_AsLongLongAndOverflow(quot, &overflow);
+    if (error_converting(neg_len)) {
+        goto finish;
+    }
+    if (overflow > 0 || neg_len >= 0) {
+        len = 0;
+    }
+    else if (overflow < 0 || neg_len < -(long long)NPY_MAX_INTP) {
+        PyErr_SetString(PyExc_OverflowError,
+                "arange: overflow while computing length");
+    }
+    else {
+        len = (npy_intp)-neg_len;
+    }
+
+ finish:
+    Py_XDECREF(istart);
+    Py_XDECREF(istop);
+    Py_XDECREF(istep);
+    Py_XDECREF(diff);
+    Py_XDECREF(quot);
+    return len;
+}
+
+
+/*
  * the formula is len = (intp) ceil((stop - start) / step);
  */
 static npy_intp
@@ -3199,6 +3282,22 @@ _calc_length(PyObject *start, PyObject *stop, PyObject *step, PyObject **next, i
     PyObject *zero, *val;
     int next_is_nonzero, val_is_zero;
     double value;
+
+    /*
+     * The floating point division below may round, so compute the length
+     * of integer aranges exactly (gh-20226, gh-27985).
+     */
+    if (arange_is_integer(start) && arange_is_integer(stop) &&
+            arange_is_integer(step)) {
+        len = arange_integer_length(start, stop, step);
+        if (len > 0) {
+            *next = PyNumber_Add(start, step);
+            if (!*next) {
+                return -1;
+            }
+        }
+        return len;
+    }
 
     *next = PyNumber_Subtract(stop, start);
     if (!(*next)) {

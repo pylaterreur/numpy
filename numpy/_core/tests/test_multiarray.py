@@ -11152,6 +11152,46 @@ class TestArange:
         assert_raises(ZeroDivisionError, np.arange, 0, 0, 0)
         assert_raises(ZeroDivisionError, np.arange, 0.0, 0.0, 0.0)
 
+        assert_raises(ZeroDivisionError, np.arange, 0, 10, np.int64(0))
+
+    @pytest.mark.parametrize("start, stop, step", [
+        (0, -9007199254740994, -9007199254740993),  # gh-27985
+        (0, 108086391056891901, 1080863910568919),  # gh-20226
+        (5, 3 * (2**53 + 1) + 6, 2**53 + 1),
+        (-5, -3 * (2**53 + 1) - 6, -(2**53 + 1)),
+        (-2**62, 2**62, 2**60 + 1),  # stop - start overflows int64
+    ])
+    @pytest.mark.parametrize("type_", [int, np.int64])
+    def test_integer_length(self, start, stop, step, type_):
+        # The length of integer aranges was computed by float division
+        res = np.arange(type_(start), type_(stop), type_(step))
+        assert res.tolist() == list(range(start, stop, step))
+
+    def test_integer_length_uint64(self):
+        # gh-20226
+        start, stop, step = 0, 108086391056891901, 1080863910568919
+        expected = list(range(start, stop, step))
+        res = np.arange(start, stop, step, dtype=np.uint64)
+        assert res.tolist() == expected
+        res = np.arange(np.uint64(start), np.uint64(stop), np.uint64(step),
+                        dtype=np.uint64)
+        assert res.tolist() == expected
+
+    def test_integer_length_limits(self):
+        with pytest.raises(ValueError, match="Maximum allowed size exceeded"):
+            np.arange(np.int64(-2**63), np.int64(2**63 - 1))
+        # The length used to round to 2**63, giving an empty array
+        with pytest.raises(ValueError):
+            np.arange(2**63 - 1)
+        # Arithmetic with these scalars would wrap around (uint64 0 - 5) or
+        # give floats (uint64 with int64)
+        res = np.arange(np.uint64(5), np.uint64(0), np.int64(-1))
+        assert_array_equal(res, [5, 4, 3, 2, 1])
+        # Python ints beyond the int64 range
+        assert np.arange(10**400, 0, dtype=object).size == 0
+        res = np.arange(0, 10**20 + 1, 10**19, dtype=object)
+        assert res.tolist() == list(range(0, 10**20 + 1, 10**19))
+
     def test_require_range(self):
         assert_raises(TypeError, np.arange)
         assert_raises(TypeError, np.arange, step=3)
