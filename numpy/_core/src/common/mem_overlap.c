@@ -253,7 +253,7 @@ euclid(npy_int64 a1, npy_int64 a2, npy_int64 *a_gcd, npy_int64 *gamma, npy_int64
 /**
  * Precompute GCD and bounds transformations
  */
-static int
+static inline int
 diophantine_precompute(unsigned int n,
                        diophantine_term_t *E,
                        diophantine_term_t *Ep,
@@ -663,7 +663,8 @@ offset_bounds_from_strides(const npy_intp itemsize, const int nd,
 {
     npy_intp max_axis_offset;
     npy_intp lower = 0;
-    npy_intp upper = 0;
+    /* The range is half-open, so it extends one item past the last offset */
+    npy_intp upper = itemsize;
     int i;
 
     for (i = 0; i < nd; i++) {
@@ -682,8 +683,6 @@ offset_bounds_from_strides(const npy_intp itemsize, const int nd,
             lower += max_axis_offset;
         }
     }
-    /* Return a half-open range */
-    upper += itemsize;
     *lower_offset = lower;
     *upper_offset = upper;
 }
@@ -692,21 +691,14 @@ offset_bounds_from_strides(const npy_intp itemsize, const int nd,
 /* Gets a half-open range [start, end) which contains the array data */
 static void
 get_array_memory_extents(PyArrayObject *arr,
-                         npy_uintp *out_start, npy_uintp *out_end,
-                         npy_uintp *num_bytes)
+                         npy_uintp *out_start, npy_uintp *out_end)
 {
     npy_intp low, upper;
-    int j;
     offset_bounds_from_strides(PyArray_ITEMSIZE(arr), PyArray_NDIM(arr),
                                PyArray_DIMS(arr), PyArray_STRIDES(arr),
                                &low, &upper);
     *out_start = (npy_uintp)PyArray_DATA(arr) + (npy_uintp)low;
     *out_end = (npy_uintp)PyArray_DATA(arr) + (npy_uintp)upper;
-
-    *num_bytes = PyArray_ITEMSIZE(arr);
-    for (j = 0; j < PyArray_NDIM(arr); ++j) {
-        *num_bytes *= PyArray_DIM(arr, j);
-    }
 }
 
 
@@ -742,6 +734,58 @@ strides_to_terms(PyArrayObject *arr, diophantine_term_t *terms,
 }
 
 
+/*
+ * Solve the problem of solve_may_share_memory as a Diophantine equation,
+ * for arrays whose memory extents overlap.  uintp_rhs is its right-hand
+ * side, computed from the extents.
+ *
+ * Not inlined, so that solve_may_share_memory does not set up the large
+ * stack frame needed here when the extents don't overlap.
+ */
+NPY_NOINLINE mem_overlap_t
+solve_overlapping_extents(PyArrayObject *a, PyArrayObject *b,
+                          npy_uintp uintp_rhs, Py_ssize_t max_work)
+{
+    npy_int64 rhs;
+    diophantine_term_t terms[2*NPY_MAXDIMS + 2];
+    npy_int64 x[2*NPY_MAXDIMS + 2];
+    unsigned int nterms;
+
+    if (uintp_rhs > NPY_MAX_INT64) {
+        /* Integer overflow */
+        return MEM_OVERLAP_OVERFLOW;
+    }
+    rhs = (npy_int64)uintp_rhs;
+
+    nterms = 0;
+    if (strides_to_terms(a, terms, &nterms, 1)) {
+        return MEM_OVERLAP_OVERFLOW;
+    }
+    if (strides_to_terms(b, terms, &nterms, 1)) {
+        return MEM_OVERLAP_OVERFLOW;
+    }
+    if (PyArray_ITEMSIZE(a) > 1) {
+        terms[nterms].a = 1;
+        terms[nterms].ub = PyArray_ITEMSIZE(a) - 1;
+        ++nterms;
+    }
+    if (PyArray_ITEMSIZE(b) > 1) {
+        terms[nterms].a = 1;
+        terms[nterms].ub = PyArray_ITEMSIZE(b) - 1;
+        ++nterms;
+    }
+
+    /* Simplify, if possible */
+    if (diophantine_simplify(&nterms, terms, rhs)) {
+        /* Integer overflow */
+        return MEM_OVERLAP_OVERFLOW;
+    }
+
+    /* Solve */
+    return solve_diophantine(nterms, terms, rhs, max_work, 0, x);
+}
+
+
 /**
  * Determine whether two arrays share some memory.
  *
@@ -758,16 +802,11 @@ NPY_VISIBILITY_HIDDEN mem_overlap_t
 solve_may_share_memory(PyArrayObject *a, PyArrayObject *b,
                        Py_ssize_t max_work)
 {
-    npy_int64 rhs;
-    diophantine_term_t terms[2*NPY_MAXDIMS + 2];
-    npy_uintp start1 = 0, end1 = 0, size1 = 0;
-    npy_uintp start2 = 0, end2 = 0, size2 = 0;
-    npy_uintp uintp_rhs;
-    npy_int64 x[2*NPY_MAXDIMS + 2];
-    unsigned int nterms;
+    npy_uintp start1 = 0, end1 = 0;
+    npy_uintp start2 = 0, end2 = 0;
 
-    get_array_memory_extents(a, &start1, &end1, &size1);
-    get_array_memory_extents(b, &start2, &end2, &size2);
+    get_array_memory_extents(a, &start1, &end1);
+    get_array_memory_extents(b, &start2, &end2);
 
     if (!(start1 < end2 && start2 < end1 && start1 < end1 && start2 < end2)) {
         /* Memory extents don't overlap */
@@ -801,40 +840,8 @@ solve_may_share_memory(PyArrayObject *a, PyArrayObject *b,
        We pick the problem with the smaller RHS (they are non-negative due to
        the extent check above.)
     */
-
-    uintp_rhs = MIN(end2 - 1 - start1, end1 - 1 - start2);
-    if (uintp_rhs > NPY_MAX_INT64) {
-        /* Integer overflow */
-        return MEM_OVERLAP_OVERFLOW;
-    }
-    rhs = (npy_int64)uintp_rhs;
-
-    nterms = 0;
-    if (strides_to_terms(a, terms, &nterms, 1)) {
-        return MEM_OVERLAP_OVERFLOW;
-    }
-    if (strides_to_terms(b, terms, &nterms, 1)) {
-        return MEM_OVERLAP_OVERFLOW;
-    }
-    if (PyArray_ITEMSIZE(a) > 1) {
-        terms[nterms].a = 1;
-        terms[nterms].ub = PyArray_ITEMSIZE(a) - 1;
-        ++nterms;
-    }
-    if (PyArray_ITEMSIZE(b) > 1) {
-        terms[nterms].a = 1;
-        terms[nterms].ub = PyArray_ITEMSIZE(b) - 1;
-        ++nterms;
-    }
-
-    /* Simplify, if possible */
-    if (diophantine_simplify(&nterms, terms, rhs)) {
-        /* Integer overflow */
-        return MEM_OVERLAP_OVERFLOW;
-    }
-
-    /* Solve */
-    return solve_diophantine(nterms, terms, rhs, max_work, 0, x);
+    return solve_overlapping_extents(
+            a, b, MIN(end2 - 1 - start1, end1 - 1 - start2), max_work);
 }
 
 
