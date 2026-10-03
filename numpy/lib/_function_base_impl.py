@@ -14,6 +14,7 @@ from numpy._core.fromnumeric import any, mean, nonzero, partition, ravel, sum
 from numpy._core.multiarray import (
     _place,
     bincount,
+    count_nonzero,
     interp as compiled_interp,
     interp_complex as compiled_interp_complex,
     normalize_axis_index,
@@ -45,6 +46,7 @@ from numpy._core.umath import (
     exp,
     floor,
     frompyfunc,
+    isfinite,
     less_equal,
     minimum,
     mod,
@@ -4617,6 +4619,34 @@ def _get_gamma(virtual_indexes, previous_indexes, method):
     return np.asanyarray(gamma, dtype=virtual_indexes.dtype)
 
 
+@np.errstate(invalid="ignore", over="ignore")
+def _lerp_unchecked(a, b, t, out):
+    """
+    `_lerp` without the handling of non-finite values and without floating
+    point warnings for them (a decorated function is faster than a ``with``
+    block).
+    """
+    diff_b_a = b - a
+    # For t >= 0.5 use b - diff_b_a * (1 - t), which is exactly b for t == 1,
+    # rather than a + diff_b_a * t.  Only compute the formulas that are
+    # needed (a single one if t is a scalar).
+    upper = t >= 0.5
+    if getattr(upper, "ndim", 0):
+        n_upper = count_nonzero(upper)
+        all_upper = n_upper == upper.size
+    else:
+        n_upper = all_upper = bool(upper)
+    if all_upper:
+        # Computed in the dtype of `out` if given, like the subtract below.
+        return subtract(b, diff_b_a * (1 - t), out=out,
+                        dtype=None if out is ... else type(out.dtype))
+    lerp_interpolation = add(a, diff_b_a * t, out=out)
+    if n_upper:
+        subtract(b, diff_b_a * (1 - t), out=lerp_interpolation, where=upper,
+                 casting='unsafe', dtype=type(lerp_interpolation.dtype))
+    return lerp_interpolation
+
+
 def _lerp(a, b, t, out=None):
     """
     Compute the linear interpolation weighted by gamma on each point of
@@ -4631,10 +4661,42 @@ def _lerp(a, b, t, out=None):
     out : array_like
         Output array.
     """
-    diff_b_a = b - a
-    lerp_interpolation = add(a, diff_b_a * t, out=... if out is None else out)
-    subtract(b, diff_b_a * (1 - t), out=lerp_interpolation, where=t >= 0.5,
-             casting='unsafe', dtype=type(lerp_interpolation.dtype))
+    lerp_interpolation = _lerp_unchecked(a, b, t, ... if out is None else out)
+    # An infinite a or b (or an overflowing b - a) gives nan or inf above,
+    # also where the result is well defined (gh-21091).  Only fix these
+    # points up if the (cheap) check below finds any.
+    if lerp_interpolation.dtype.kind != "f":
+        all_finite = True
+    elif lerp_interpolation.ndim == 0:
+        all_finite = math.isfinite(lerp_interpolation)
+    else:
+        all_finite = (count_nonzero(isfinite(lerp_interpolation))
+                      == lerp_interpolation.size)
+    if not all_finite:
+        with np.errstate(invalid="ignore", over="ignore"):
+            # The weights of b and a as used above: a Python float t is cast
+            # (e.g. to float16), so a weight may become 0 (or overflow).
+            dtype = np.result_type(a, b, t)
+            weight_b = np.asarray(t, dtype=dtype)
+            weight_a = np.asarray(1 - t, dtype=dtype)
+            diff_b_a = b - a
+            # only used where neither weight is 0
+            weighted_a = weight_a * a
+            weighted_b = weight_b * b
+        # Where b - a is not finite, the result is a if the weight of b is 0,
+        # b if the weight of a is 0, and (1 - t) * a + t * b otherwise: the
+        # infinite end point (nan for infinities of opposite sign), or the
+        # finite result if b - a overflowed.  A non-finite result where
+        # a == b (both infinite, or the weight overflowed) is a.  A nan a or
+        # b gives nan.
+        inf_diff = np.isinf(diff_b_a)
+        np.copyto(lerp_interpolation, a, casting="unsafe",
+                  where=(inf_diff & (weight_b == 0))
+                  | ((a == b) & ~isfinite(lerp_interpolation)))
+        np.copyto(lerp_interpolation, b, casting="unsafe",
+                  where=inf_diff & (weight_a == 0))
+        add(weighted_a, weighted_b, out=lerp_interpolation, casting="unsafe",
+            where=inf_diff & (weight_a != 0) & (weight_b != 0))
     if lerp_interpolation.ndim == 0 and out is None:
         lerp_interpolation = lerp_interpolation[()]  # unpack 0d arrays
     return lerp_interpolation

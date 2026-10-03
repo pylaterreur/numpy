@@ -1343,6 +1343,15 @@ class TestNanFunctions_Quantile:
         assert_equal(np.nanquantile(x, 1), 3.5)
         assert_equal(np.nanquantile(x, 0.5), 1.75)
 
+    def test_inf(self):
+        # gh-21091
+        arr = np.array([np.nan, 0., 1., np.inf, np.nan])
+        assert_equal(np.nanquantile(arr, [0., 0.5, 1.]), [0., 1., np.inf])
+        assert_equal(np.nanpercentile(arr, [0., 50., 100.]), [0., 1., np.inf])
+        assert_equal(np.nanquantile(arr, 0.), 0.)
+        arr = np.array([[np.inf, np.nan, np.inf], [-np.inf, 0., np.nan]])
+        assert_equal(np.nanquantile(arr, 0.5, axis=1), [np.inf, -np.inf])
+
     def test_complex(self):
         arr_c = np.array([0.5 + 3.0j, 2.1 + 0.5j, 1.6 + 2.3j], dtype='G')
         assert_raises(TypeError, np.nanquantile, arr_c, 0.5)

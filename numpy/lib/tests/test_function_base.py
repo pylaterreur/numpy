@@ -4442,6 +4442,79 @@ class TestQuantile:
         assert np.isscalar(actual)
         assert_equal(np.quantile(a, 0.5), np.nan)
 
+    @pytest.mark.parametrize(["arr", "q", "expected"], [
+        ([0., 1., np.inf], 0.5, 1.),
+        ([0., np.inf], 0., 0.),
+        ([1., 2., 3., np.inf], 1., np.inf),
+        ([np.inf, np.inf], 0.5, np.inf),
+        ([0., np.inf], 0.5, np.inf),
+        ([-np.inf, 0., 1.], 0.5, 0.),
+        ([-np.inf, 0.], 1., 0.),
+        ([-np.inf, 1., 2., 3.], 0., -np.inf),
+        ([-np.inf, -np.inf], 0.5, -np.inf),
+        ([-np.inf, 0.], 0.5, -np.inf),
+        ([-np.inf, 5., np.inf], 0.5, 5.),
+        ([-np.inf, np.inf], 0., -np.inf),
+        ([-np.inf, np.inf], 1., np.inf),
+    ])
+    def test_inf(self, arr, q, expected):
+        # gh-21091: infinities must not give nan for well defined results
+        assert_equal(np.quantile(arr, q), expected)
+        assert_equal(np.percentile(arr, 100 * q), expected)
+        assert_equal(np.quantile(arr, [q]), [expected])
+
+    def test_inf_opposite_signs(self):
+        # Interpolating between -inf and inf is undefined (as in np.median)
+        with np.errstate(invalid="ignore"):
+            assert_equal(np.quantile([-np.inf, np.inf], 0.5), np.nan)
+            assert_equal(np.quantile([-np.inf, np.inf], [0.25, 0.75]),
+                         [np.nan, np.nan])
+
+    @pytest.mark.parametrize("method", quantile_methods)
+    def test_inf_methods(self, method):
+        # Infinities give the same results as huge values would, except that
+        # interpolating towards them gives an infinite result.
+        arr = np.array([-np.inf, -np.inf, 1., 2., 3., np.inf, np.inf])
+        q = np.linspace(0, 1, 41)
+        expected = np.quantile(np.clip(arr, -1e300, 1e300), q, method=method)
+        expected[expected > 1e200] = np.inf
+        expected[expected < -1e200] = -np.inf
+        assert_equal(np.quantile(arr, q, method=method), expected)
+
+    def test_inf_axis_out(self):
+        arr = np.array([[0., -np.inf, 1.], [np.inf, 2., 3.], [np.inf, 4., np.inf]])
+        out = np.empty((2, 3))
+        res = np.quantile(arr, [0., 0.5], axis=0, out=out)
+        assert res is out
+        assert_equal(out, [[0., -np.inf, 1.], [np.inf, 2., 3.]])
+        assert_equal(np.quantile(arr, 0.5, axis=1), [0., 3., np.inf])
+
+    @pytest.mark.parametrize("dtype", np.typecodes["Float"])
+    def test_inf_dtype(self, dtype):
+        arr = np.array([0, 1, np.inf], dtype=dtype)
+        res = np.quantile(arr, 0.5)
+        assert res.dtype == dtype
+        assert_equal(res, 1)
+        res = np.quantile(arr, np.array([0, 0.75, 1], dtype=dtype))
+        assert res.dtype == dtype
+        assert_equal(res, [0, np.inf, np.inf])
+
+    def test_overflow(self):
+        # b - a overflows, but the interpolated values do not
+        res = np.quantile([-1e308, 1e308], [0, 0.25, 0.5, 0.75, 1])
+        assert_equal(res, [-1e308, -5e307, 0, 5e307, 1e308])
+        res = np.quantile(np.array([-6e4, 6e4], dtype=np.float16), [0, 0.25, 1])
+        assert_equal(res, [-6e4, -3e4, 6e4])
+
+    def test_float16_weights(self):
+        # The interpolation weight is cast to float16: here 25 * 0.28 gives
+        # 7.000000000000001, but the weight (9e-16) of `inf` becomes 0.
+        arr = np.arange(26, dtype=np.float16)
+        arr[8:] = np.inf
+        assert_equal(np.percentile(arr, 28), 7)
+        # The weight of a clamped index (here 70000) overflows float16.
+        assert_equal(np.quantile(np.ones(70000, dtype=np.float16), 1.), 1)
+
     @pytest.mark.parametrize("weights", [False, True])
     @pytest.mark.parametrize("method", quantile_methods)
     @pytest.mark.parametrize("alpha", [0.2, 0.5, 0.9])
@@ -4809,6 +4882,29 @@ class TestLerp:
         b = np.array(5)
         t = np.array(0.2)
         assert nfb._lerp(a, b, t) == 2.6
+
+    @pytest.mark.skipif(not HAS_HYPOTHESIS, reason="hypothesis is not installed")
+    @hypothesis.given(t=st.floats(allow_nan=False, allow_infinity=False,
+                                  min_value=0, max_value=1),
+                      a=st.floats(allow_nan=False),
+                      b=st.floats(allow_nan=False))
+    def test_linear_interpolation_formula_non_finite(self, t, a, b):
+        # gh-21091: exact end points even if the other one is infinite, and
+        # an infinite end point "wins" (unless both are, with opposite signs)
+        with np.errstate(invalid="ignore"):
+            res = nfb._lerp(a, b, t)
+        if t == 0 or a == b:
+            assert res == a
+        elif t == 1:
+            assert res == b
+        elif np.isinf(a) and np.isinf(b):
+            assert np.isnan(res)
+        elif np.isinf(a):
+            assert res == a
+        elif np.isinf(b):
+            assert res == b
+        else:  # b - a may overflow
+            assert min(a, b) <= res <= max(a, b)
 
 
 class TestMedian:
