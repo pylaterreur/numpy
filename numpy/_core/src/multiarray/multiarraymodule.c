@@ -2030,6 +2030,20 @@ array_copyto(PyObject *NPY_UNUSED(ignored),
         if (wheremask == NULL) {
             goto fail;
         }
+        /*
+         * The mask is read while dst is written, so copy it if they may
+         * share memory.  A mask that is dst itself is fine: each element
+         * is read just before it is written.
+         */
+        if ((wheremask != dst ||
+                    solve_may_have_internal_overlap(dst, 1) != 0) &&
+                solve_may_share_memory(dst, wheremask, 1) != 0) {
+            Py_SETREF(wheremask, (PyArrayObject *)PyArray_NewCopy(
+                    wheremask, NPY_KEEPORDER));
+            if (wheremask == NULL) {
+                goto fail;
+            }
+        }
     }
 
     if (PyArray_AssignArray(dst, src, wheremask, casting) < 0) {

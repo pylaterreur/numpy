@@ -1571,6 +1571,26 @@ class TestExtins:
         place(a, [0, 1], '9')
         assert_array_equal(a, ['12', '9'])
 
+    def test_place_overlapping(self):
+        # The mask and the values may be views of the array, so they must
+        # be read before any element is written
+        a = np.arange(5)
+        place(a[1:], np.ones(4, dtype=bool), a[:-1])
+        assert_array_equal(a, [0, 0, 1, 2, 3])
+
+        a = np.arange(5)
+        place(a, np.ones(5, dtype=bool), a[1:])  # the values are repeated
+        assert_array_equal(a, [1, 2, 3, 4, 1])
+
+        m = np.array([True, True, True, False])
+        place(m[1:], m[:-1], [False])
+        assert_array_equal(m, [True, False, False, False])
+
+        # `place(mask, mask, values)` narrows down a mask in place
+        m = np.array([True, False, True, True])
+        place(m, m, [False, True])
+        assert_array_equal(m, [False, False, True, False])
+
     def test_both(self):
         a = rand(10)
         mask = a > 0.5

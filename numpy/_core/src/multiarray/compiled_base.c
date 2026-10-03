@@ -303,6 +303,26 @@ arr_place(PyObject *NPY_UNUSED(self), PyObject *args, PyObject *kwdict)
         }
     }
 
+    /*
+     * The mask and the values are read while the array is written, so copy
+     * them if they may share memory with it.  A mask that is the array
+     * itself is fine: each element is read just before it is written.
+     */
+    if (mask != array && solve_may_share_memory(array, mask, 1) != 0) {
+        Py_SETREF(mask, (PyArrayObject *)PyArray_NewCopy(mask, NPY_CORDER));
+        if (mask == NULL) {
+            goto fail;
+        }
+        mask_data = PyArray_DATA(mask);
+    }
+    if (solve_may_share_memory(array, values, 1) != 0) {
+        Py_SETREF(values,
+                  (PyArrayObject *)PyArray_NewCopy(values, NPY_CORDER));
+        if (values == NULL) {
+            goto fail;
+        }
+    }
+
     src = PyArray_DATA(values);
     j = 0;
 

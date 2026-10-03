@@ -458,6 +458,23 @@ def test_copyto_overlapping_where_false_no_leak():
     assert_array_equal(a, original)
 
 
+def test_copyto_where_overlapping_dst():
+    # The mask may be a view of `dst`, so it must be read before any
+    # element is written
+    m = np.array([True, False, False, True])
+    np.copyto(m, False, where=m[::-1])
+    assert_array_equal(m, [False] * 4)
+
+    m = np.array([[False, True], [True, False]])
+    np.copyto(m, np.zeros((2, 2), dtype=bool), where=m.T)
+    assert not m.any()
+
+    # `copyto(mask, values, where=mask)` narrows down a mask in place
+    m = np.array([True, False, True, True])
+    np.copyto(m, [False, True, True, False], where=m)
+    assert_array_equal(m, [False, False, True, False])
+
+
 def test_copyto_cast_safety():
     with pytest.raises(TypeError):
         np.copyto(np.arange(3), 3., casting="safe")
