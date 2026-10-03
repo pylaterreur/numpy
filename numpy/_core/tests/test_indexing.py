@@ -1403,6 +1403,69 @@ class TestBooleanIndexing:
         # rows after the failing chunk are untouched
         assert not a[2:].any()
 
+    @pytest.mark.parametrize("dtype", [np.intp, object, "i4,O", "T"])
+    @pytest.mark.parametrize(("target", "mask", "values"), [
+        pytest.param(lambda a: a, [True] * 8, lambda a: a[::-1], id="reversed"),
+        pytest.param(lambda a: a[1:], [True, True, False, True, True, False, True],
+                     lambda a: a[:5], id="shifted"),
+        pytest.param(lambda a: a, [False] * 3 + [True] * 4 + [False],
+                     lambda a: a[::2], id="strided"),
+        pytest.param(lambda a: a.reshape(2, 4).T, np.ones((4, 2), dtype=bool),
+                     lambda a: a, id="transposed"),
+    ])
+    def test_assign_overlapping_values(self, dtype, target, mask, values):
+        # The values may be a view of the array, so they must be read before
+        # any element is written.
+        a = np.arange(8).astype(dtype)
+        expected = a.copy()
+        target(expected)[np.array(mask)] = values(a).copy()
+        target(a)[np.array(mask)] = values(a)
+        assert_array_equal(a, expected)
+
+    def test_assign_overlapping_0d_value(self):
+        # The value is read for every element, so it must be copied if it
+        # is a view of the array (here one that needs a cast).
+        a = np.array([1.0, 2.0, 3.0, 4.0])
+        value = a.view(np.int64)[0, ...]
+        expected = float(value)
+        a[np.ones(4, dtype=bool)] = value
+        assert_array_equal(a, [expected] * 4)
+
+    @pytest.mark.parametrize("values", [False, [False, False]])
+    def test_assign_overlapping_mask(self, values):
+        # The mask may be a view of the array, so it must be read before
+        # any element is written.
+        m = np.array([True, False, False, True])
+        m[m[::-1]] = values
+        assert_array_equal(m, [False] * 4)
+
+        m = np.array([[False, True], [True, False]])
+        m[m.T] = values
+        assert not m.any()
+
+        a = np.array([1, 0, 0, 1], dtype=np.uint8)
+        a[a.view(bool)[::-1]] = values
+        assert_array_equal(a, [0] * 4)
+
+    def test_assign_mask_is_self(self):
+        # `mask[mask] = values` narrows down a mask in place
+        m = np.array([True, False, True, True])
+        m[m] = [False, True, False]
+        assert_array_equal(m, [False, False, True, False])
+
+        m = np.array(True)
+        m[m] = False
+        assert not m
+
+    def test_assign_overlapping_empty(self):
+        a = np.arange(0)
+        a[np.zeros(0, dtype=bool)] = a[::-1]
+        assert a.size == 0
+
+        a = np.arange(4)
+        a[np.zeros(4, dtype=bool)] = a[:0]
+        assert_array_equal(a, np.arange(4))
+
 
 class TestArrayToIndexDeprecation:
     """Creating an index from array not 0-D is an error.

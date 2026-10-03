@@ -1884,6 +1884,7 @@ array_assign_subscript(PyArrayObject *self, PyObject *ind, PyObject *op)
 
     /* Single boolean array */
     if (index_type == HAS_BOOL) {
+        int values_may_overlap = 1;
         if (!PyArray_Check(op)) {
             Py_INCREF(PyArray_DESCR(self));
             tmp_arr = (PyArrayObject *)PyArray_FromAny(op,
@@ -1892,10 +1893,38 @@ array_assign_subscript(PyArrayObject *self, PyObject *ind, PyObject *op)
             if (tmp_arr == NULL) {
                 goto fail;
             }
+            /* A Python scalar is converted to a new array */
+            values_may_overlap = !(PyFloat_CheckExact(op) ||
+                                   PyLong_CheckExact(op) || PyBool_Check(op));
         }
         else {
             Py_INCREF(op);
             tmp_arr = (PyArrayObject *)op;
+        }
+
+        /*
+         * The values and the mask are read while self is written, so copy
+         * them if they may share memory with it.  A mask that is self (as
+         * in `mask[mask] = values`) is fine: each element is read just
+         * before it is written.
+         */
+        if (values_may_overlap &&
+                solve_may_share_memory(self, tmp_arr, 1) != 0) {
+            Py_SETREF(tmp_arr,
+                      (PyArrayObject *)PyArray_NewCopy(tmp_arr, NPY_ANYORDER));
+            if (tmp_arr == NULL) {
+                goto fail;
+            }
+        }
+        if ((indices[0].object != (PyObject *)self ||
+                    solve_may_have_internal_overlap(self, 1) != 0) &&
+                solve_may_share_memory(
+                    self, (PyArrayObject *)indices[0].object, 1) != 0) {
+            Py_SETREF(indices[0].object, PyArray_NewCopy(
+                    (PyArrayObject *)indices[0].object, NPY_KEEPORDER));
+            if (indices[0].object == NULL) {
+                goto fail;
+            }
         }
 
         if (array_assign_boolean_subscript(self,
