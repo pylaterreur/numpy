@@ -4226,6 +4226,9 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue, *,
     Specifying a higher-accuracy accumulator using the `dtype` keyword can
     alleviate this issue.
 
+    By default, `float16` results are computed using `float32` intermediates
+    for extra precision.
+
     Examples
     --------
     >>> import numpy as np
@@ -4425,6 +4428,9 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue, *,
     the results to be inaccurate, especially for `float32` (see example
     below).  Specifying a higher-accuracy accumulator using the ``dtype``
     keyword can alleviate this issue.
+
+    By default, `float16` results are computed using `float32` intermediates
+    for extra precision.
 
     Examples
     --------

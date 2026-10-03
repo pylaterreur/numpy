@@ -23,6 +23,9 @@ umr_bitwise_count = um.bitwise_count
 umr_any = um.logical_or.reduce
 umr_all = um.logical_and.reduce
 
+# Types that _var() computes in float64 (integers) or float32 (float16)
+_var_upcast_types = (nt.integer, nt.bool, nt.float16)
+
 # Complex types to -> (2,)float view for fast-path computation in _var()
 _complex_to_float = {
     nt.dtype(nt.csingle): nt.dtype(nt.single),
@@ -155,9 +158,18 @@ def _var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, *,
         warnings.warn("Degrees of freedom <= 0 for slice", RuntimeWarning,
                       stacklevel=2)
 
-    # Cast bool, unsigned int, and int to float64 by default
-    if dtype is None and issubclass(arr.dtype.type, (nt.integer, nt.bool)):
-        dtype = mu.dtype('f8')
+    is_float16_result = False
+    # Cast bool, unsigned int, and int to float64 by default, and compute
+    # float16 in float32 (like _mean), as float16 sums easily overflow.
+    if dtype is None and issubclass(arr.dtype.type, _var_upcast_types):
+        if arr.dtype.type is nt.float16:
+            dtype = mu.dtype('f4')
+            is_float16_result = True
+            if mean is not None:
+                # Compute the deviations from a given mean in float32 too.
+                mean = asanyarray(mean, dtype=dtype)
+        else:
+            dtype = mu.dtype('f8')
 
     if mean is not None:
         arrmean = mean
@@ -207,8 +219,13 @@ def _var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, *,
     if isinstance(ret, mu.ndarray):
         ret = um.true_divide(
                 ret, rcount, out=ret, casting='unsafe', subok=False)
+        if is_float16_result and out is None:
+            ret = arr.dtype.type(ret)
     elif hasattr(ret, 'dtype'):
-        ret = ret.dtype.type(ret / rcount)
+        if is_float16_result:
+            ret = arr.dtype.type(ret / rcount)
+        else:
+            ret = ret.dtype.type(ret / rcount)
     else:
         ret = ret / rcount
 

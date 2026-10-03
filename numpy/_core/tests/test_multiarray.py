@@ -7755,6 +7755,33 @@ class TestStats:
         # of float32.
         assert_(_mean(np.ones(100000, dtype='float16')) == 1)
 
+    def test_var_std_float16(self):
+        # These fail if the sums inside var and std are done in float16
+        # instead of float32: they overflow (gh-21941) or stop growing.
+        a = np.ones(100000, dtype=np.float16)
+        a[::2] = -1
+        b = np.stack([a, a], axis=1)
+        for f in [_var, _std]:
+            res = f(a)
+            assert res.dtype == np.float16
+            assert res == 1
+            res = f(b, axis=0)
+            assert res.dtype == np.float16
+            assert_equal(res, [1, 1])
+
+    def test_var_std_float16_mean(self):
+        # With a float16 mean given, the deviations must still be float32:
+        # the square of the deviation of 300 overflows float16.
+        a = np.zeros(1000, dtype=np.float16)
+        a[0] = 300
+        mean = a.mean(keepdims=True)
+        assert mean.dtype == np.float16
+        for f, expected in [(_var, 89.94), (_std, 9.484)]:
+            res = f(a, mean=mean)
+            assert res.dtype == np.float16
+            assert_equal(res, np.float16(expected))
+            assert_equal(res, f(a))
+
     def test_mean_axis_error(self):
         # Ensure that AxisError is raised instead of IndexError when axis is
         # out of bounds, see gh-15817.
