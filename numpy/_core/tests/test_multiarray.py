@@ -8686,6 +8686,52 @@ class TestMatmul(MatmulCommon):
             m1_, m2_, mo_ = [apply_mode(*x) for x in zip([m1, m2, mo], mode)]
             assert_equal(np.matmul(m1_, m2_, out=mo_), dot_res)
 
+    @staticmethod
+    def _layouts(x):
+        # copies of x in several memory layouts
+        yield x.copy()
+        if x.ndim == 2:
+            yield np.asfortranarray(x)
+        strided = np.zeros(tuple(3 * s for s in x.shape), dtype=x.dtype)
+        strided = strided[(slice(None, None, 3),) * x.ndim]
+        strided[...] = x
+        yield strided
+        yield np.flip(np.flip(x).copy())
+
+    # gh-23260: the loop used without BLAS (for these types, and for float
+    # types in layouts BLAS cannot use) picks its loop order from the strides
+    # and from the number of columns of the result (fewer than 8 or not)
+    @pytest.mark.parametrize("dtype", "bhilqBHILQefdgFDG")
+    @pytest.mark.parametrize("shape", [
+        (0, 3, 9), (3, 0, 9), (3, 9, 0), (1, 1, 1), (1, 7, 9), (9, 7, 1),
+        (6, 1, 9), (9, 17, 7), (9, 17, 33),
+    ])
+    def test_noblas_layouts(self, dtype, shape):
+        m, n, p = shape
+        dtype = np.dtype(dtype)
+        rng = np.random.default_rng(23260)
+
+        def make(shape):
+            if dtype.kind in "iu":
+                # use the whole range of the type, so that results wrap
+                info = np.iinfo(dtype)
+                return rng.integers(info.min, info.max, shape, dtype=dtype,
+                                    endpoint=True)
+            # small integers, so that the results are exact
+            return rng.integers(-3, 4, shape).astype(dtype)
+
+        a, b, v, w = make((m, n)), make((n, p)), make(n), make(m)
+        expected = np.dot(a, b)
+        for a_, b_ in itertools.product(self._layouts(a), self._layouts(b)):
+            assert_equal(self.matmul(a_, b_), expected)
+        for out in self._layouts(np.ones((m, p), dtype=dtype)):
+            assert self.matmul(a, b, out=out) is out
+            assert_equal(out, expected)
+        for a_, v_ in itertools.product(self._layouts(a), self._layouts(v)):
+            assert_equal(self.matmul(a_, v_), np.dot(a, v))
+        for w_, a_ in itertools.product(self._layouts(w), self._layouts(a)):
+            assert_equal(self.matmul(w_, a_), np.dot(w, a))
+
     def test_matmul_object(self):
         import fractions
 

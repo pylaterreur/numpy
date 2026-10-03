@@ -263,62 +263,154 @@ static void
  * #suff = , , , , f, , l, x*10#
  * #IS_COMPLEX = 0, 0, 0, 0, 1, 1, 1, 0*10#
  * #IS_HALF = 0, 0, 0, 1, 0*13#
+ * #ROWWISE = 0, 1, 1, 0, 1, 1, 0, 1*10#
  */
 
-static void
+#if !@IS_HALF@
+/* *op = 0 */
+static inline void
+@TYPE@_matmul_zero(@typ@ *op)
+{
+#if @IS_COMPLEX@
+    npy_csetreal@suff@(op, 0.0);
+    npy_csetimag@suff@(op, 0.0);
+#else
+    *op = 0;
+#endif
+}
+
+/* *op += val1 * val2 */
+static inline void
+@TYPE@_matmul_madd(@typ@ *op, @typ@ val1, @typ@ val2)
+{
+#if @IS_COMPLEX@
+    npy_csetreal@suff@(op, npy_creal@suff@(*op) +
+            ((npy_creal@suff@(val1) * npy_creal@suff@(val2)) -
+             (npy_cimag@suff@(val1) * npy_cimag@suff@(val2))));
+    npy_csetimag@suff@(op, npy_cimag@suff@(*op) +
+            ((npy_creal@suff@(val1) * npy_cimag@suff@(val2)) +
+             (npy_cimag@suff@(val1) * npy_creal@suff@(val2))));
+#else
+    *op += val1 * val2;
+#endif
+}
+#endif
+
+#if @ROWWISE@
+/* op[p] += val1 * ip2[p] for p in range(dp) */
+static inline void
+@TYPE@_matmul_axpy(@typ@ val1, char *ip2, npy_intp is2_p,
+                   char *op, npy_intp os_p, npy_intp dp)
+{
+    npy_intp p;
+
+#if !@IS_COMPLEX@
+    if (is2_p == sizeof(@typ@) && os_p == sizeof(@typ@)) {
+        /* contiguous, the compiler can vectorize this loop */
+        const @typ@ *b = (const @typ@ *)ip2;
+        @typ@ *c = (@typ@ *)op;
+
+        for (p = 0; p < dp; p++) {
+            c[p] += val1 * b[p];
+        }
+        return;
+    }
+#endif
+    for (p = 0; p < dp; p++, ip2 += is2_p, op += os_p) {
+        @TYPE@_matmul_madd((@typ@ *)op, val1, *(@typ@ *)ip2);
+    }
+}
+#endif
+
+/* sum(ip1[n] * ip2[n] for n in range(dn)), added up in this order */
+static inline @typ@
+@TYPE@_matmul_dot(char *ip1, npy_intp is1_n,
+                  char *ip2, npy_intp is2_n, npy_intp dn)
+{
+    npy_intp n;
+
+#if @IS_HALF@
+    float sum = 0;
+
+    for (n = 0; n < dn; n++, ip1 += is1_n, ip2 += is2_n) {
+        sum += npy_half_to_float(*(@typ@ *)ip1) *
+               npy_half_to_float(*(@typ@ *)ip2);
+    }
+    return npy_float_to_half(sum);
+#else
+    @typ@ sum;
+
+    @TYPE@_matmul_zero(&sum);
+#if !@IS_COMPLEX@
+    if (is1_n == sizeof(@typ@) && is2_n == sizeof(@typ@)) {
+        /* contiguous, the compiler can vectorize integer sums */
+        const @typ@ *a = (const @typ@ *)ip1, *b = (const @typ@ *)ip2;
+
+        for (n = 0; n < dn; n++) {
+            sum += a[n] * b[n];
+        }
+        return sum;
+    }
+#endif
+    for (n = 0; n < dn; n++, ip1 += is1_n, ip2 += is2_n) {
+        @TYPE@_matmul_madd(&sum, *(@typ@ *)ip1, *(@typ@ *)ip2);
+    }
+    return sum;
+#endif
+}
+
+/*
+ * Both loop orders below compute each output element the same way: start
+ * from zero and add the products in order of increasing n.  The order of
+ * the loops therefore does not change the result.  float16 (summed in
+ * float) and the long double types only use the dot products: for x87 long
+ * doubles, loading and storing the output elements in the inner loop costs
+ * more than the better memory access pattern saves.
+ */
+static NPY_GCC_OPT_3 void
 @TYPE@_matmul_inner_noblas(void *_ip1, npy_intp is1_m, npy_intp is1_n,
                            void *_ip2, npy_intp is2_n, npy_intp is2_p,
                            void *_op, npy_intp os_m, npy_intp os_p,
                            npy_intp dm, npy_intp dn, npy_intp dp)
 
 {
-    npy_intp m, n, p;
-    npy_intp ib1_n, ib2_n, ib2_p, ob_p;
+    npy_intp m, p;
     char *ip1 = (char *)_ip1, *ip2 = (char *)_ip2, *op = (char *)_op;
 
-    ib1_n = is1_n * dn;
-    ib2_n = is2_n * dn;
-    ib2_p = is2_p * dp;
-    ob_p  = os_p * dp;
+#if @ROWWISE@
+    /*
+     * Use the m-n-p loop order, adding ip1[m, n] * ip2[n, :] to the output
+     * row op[m, :] for each n, unless ip2 or op is closer to column-major.
+     * The inner loop then walks along the rows of ip2 and op rather than
+     * down the columns of ip2 (gh-23260).  For short output rows the dot
+     * products below are faster, as they keep the sum in a register.
+     */
+    if (dp >= 8 && (dn == 1 || ABS(is2_p) <= ABS(is2_n)) &&
+            (dm == 1 || ABS(os_p) <= ABS(os_m))) {
+        npy_intp n;
 
-    for (m = 0; m < dm; m++) {
-        for (p = 0; p < dp; p++) {
-#if @IS_COMPLEX@ == 1
-            npy_csetreal@suff@((@typ@ *)op, 0.0);
-            npy_csetimag@suff@((@typ@ *)op, 0.0);
-#elif @IS_HALF@
-            float sum = 0;
-#else
-            *(@typ@ *)op = 0;
-#endif
-            for (n = 0; n < dn; n++) {
-                @typ@ val1 = (*(@typ@ *)ip1);
-                @typ@ val2 = (*(@typ@ *)ip2);
-#if @IS_HALF@
-                sum += npy_half_to_float(val1) * npy_half_to_float(val2);
-#elif @IS_COMPLEX@ == 1
-                npy_csetreal@suff@((@typ@ *) op, npy_creal@suff@(*((@typ@ *) op)) + ((npy_creal@suff@(val1) * npy_creal@suff@(val2)) -
-                                       (npy_cimag@suff@(val1) * npy_cimag@suff@(val2))));
-                npy_csetimag@suff@((@typ@ *) op, npy_cimag@suff@(*((@typ@ *) op)) + ((npy_creal@suff@(val1) * npy_cimag@suff@(val2)) +
-                                       (npy_cimag@suff@(val1) * npy_creal@suff@(val2))));
-#else
-                *(@typ@ *)op += val1 * val2;
-#endif
-                ip2 += is2_n;
-                ip1 += is1_n;
+        for (m = 0; m < dm; m++, ip1 += is1_m, op += os_m) {
+            char *ip1_n = ip1, *ip2_n = ip2, *op_p = op;
+
+            for (p = 0; p < dp; p++, op_p += os_p) {
+                @TYPE@_matmul_zero((@typ@ *)op_p);
             }
-#if @IS_HALF@
-            *(@typ@ *)op = npy_float_to_half(sum);
-#endif
-            ip1 -= ib1_n;
-            ip2 -= ib2_n;
-            op  +=  os_p;
-            ip2 += is2_p;
+            for (n = 0; n < dn; n++, ip1_n += is1_n, ip2_n += is2_n) {
+                @TYPE@_matmul_axpy(*(@typ@ *)ip1_n, ip2_n, is2_p,
+                                   op, os_p, dp);
+            }
         }
-        op -= ob_p;
-        ip2 -= ib2_p;
-        ip1 += is1_m;
-        op  +=  os_m;
+        return;
+    }
+#endif
+
+    /* m-p-n loop order: one dot product per output element */
+    for (m = 0; m < dm; m++, ip1 += is1_m, op += os_m) {
+        char *ip2_p = ip2, *op_p = op;
+
+        for (p = 0; p < dp; p++, ip2_p += is2_p, op_p += os_p) {
+            *(@typ@ *)op_p = @TYPE@_matmul_dot(ip1, is1_n, ip2_p, is2_n, dn);
+        }
     }
 }
 

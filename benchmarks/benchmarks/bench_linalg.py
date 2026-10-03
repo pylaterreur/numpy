@@ -273,3 +273,28 @@ class MatmulStrided(Benchmark):
 
     def time_matmul(self, configuration):
         return np.matmul(self.a1, self.a2)
+
+
+class MatmulNoBlas(Benchmark):
+    # matmul for dtypes that BLAS does not handle, see gh-23260.
+    # Small values, so that float16 results do not overflow.
+    params = [
+        ['int8', 'int16', 'int32', 'int64', 'uint64', 'float16', 'longdouble'],
+        [16, 128, 256],
+    ]
+    param_names = ['dtype', 'size']
+
+    def setup(self, dtype, size):
+        rng = np.random.default_rng(1)
+        self.a = rng.integers(0, 10, (size, size)).astype(dtype)
+        self.b = rng.integers(0, 10, (size, size)).astype(dtype)
+        self.v = rng.integers(0, 10, size).astype(dtype)
+
+    def time_matmul(self, dtype, size):
+        np.matmul(self.a, self.b)
+
+    def time_matmul_trans_b(self, dtype, size):
+        np.matmul(self.a, self.b.T)
+
+    def time_matvec(self, dtype, size):
+        np.matmul(self.a, self.v)
