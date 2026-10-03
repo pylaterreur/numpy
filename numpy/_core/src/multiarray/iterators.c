@@ -874,6 +874,16 @@ iter_ass_subscript(PyArrayIterObject *self, PyObject *ind, PyObject *val)
             goto finish;
         }
     }
+    /* The same holds for an index array */
+    if ((index_type == HAS_FANCY || index_type == HAS_BOOL) &&
+            solve_may_share_memory(
+                self->ao, (PyArrayObject *)indices[0].object, 1) != 0) {
+        Py_SETREF(indices[0].object, PyArray_NewCopy(
+                (PyArrayObject *)indices[0].object, NPY_CORDER));
+        if (indices[0].object == NULL) {
+            goto finish;
+        }
+    }
     val_it = (PyArrayIterObject *)PyArray_IterNew((PyObject *)arrval);
     if (val_it == NULL) {
         goto finish;

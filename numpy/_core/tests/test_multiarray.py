@@ -7262,6 +7262,21 @@ class TestFlat:
         a.flat = a[1:]  # the values are repeated
         assert_array_equal(a, [1, 2, 3, 4, 5, 1])
 
+    def test_assign_overlapping_index(self):
+        # The index may be the array itself (or a view of it), so it must
+        # be read before any element is written, as for ``a[a] = values``
+        a = np.array([0, 2, 1], dtype=np.intp)
+        a.flat[a] = 0
+        assert_array_equal(a, [0, 0, 0])
+
+        a = np.array([1, 2, 0], dtype=np.intp)
+        a.flat[a] = [7, 8, 9]
+        assert_array_equal(a, [9, 7, 8])
+
+        m = np.array([[True, False], [False, True]])
+        m.flat[m.ravel()[::-1]] = False
+        assert not m.any()
+
     def test___array__(self):
         a0 = np.arange(20.0)
         a = a0.reshape(4, 5)
