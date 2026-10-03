@@ -28,13 +28,19 @@ __all__ = [
 
 _ln2 = nx.log(2.0)
 
+# The input types that _tocomplex converts to csingle and to clongdouble
+_csingle_types = (nt.half, nt.single, nt.byte, nt.short, nt.ubyte, nt.ushort,
+                  nt.csingle)
+_clongdouble_types = (nt.longdouble, nt.clongdouble)
+
 
 def _tocomplex(arr):
     """Convert its input `arr` to a complex array.
 
     The input is returned as a complex array of the smallest type that will fit
-    the original data: types like single, byte, short, etc. become csingle,
-    while others become cdouble.
+    the original data: types like half, single, byte, short, etc. become
+    csingle, longdouble and clongdouble become clongdouble, while others
+    become cdouble.
 
     A copy of the input is always made.
 
@@ -72,6 +78,11 @@ def _tocomplex(arr):
     >>> bc.dtype
     dtype('complex128')
 
+    There is no complex half type, so half becomes csingle:
+
+    >>> np.lib.scimath._tocomplex(np.array([1, 2, 3], np.half)).dtype
+    dtype('complex64')
+
     Note that even if the input was complex to begin with, a copy is still
     made, since the astype() method always copies:
 
@@ -86,9 +97,10 @@ def _tocomplex(arr):
     >>> cc
     array([1.+0.j,  2.+0.j,  3.+0.j], dtype=complex64)
     """
-    if issubclass(arr.dtype.type, (nt.single, nt.byte, nt.short, nt.ubyte,
-                                   nt.ushort, nt.csingle)):
+    if issubclass(arr.dtype.type, _csingle_types):
         return arr.astype(nt.csingle)
+    elif issubclass(arr.dtype.type, _clongdouble_types):
+        return arr.astype(nt.clongdouble)
     else:
         return arr.astype(nt.cdouble)
 
