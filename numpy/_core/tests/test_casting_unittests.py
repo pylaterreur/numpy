@@ -816,6 +816,30 @@ class TestCasting:
         _, _, view_off = cast._resolve_descriptors((from_dt, to_dt))
         assert view_off == expected_off
 
+    @pytest.mark.parametrize("dtype", [
+        *(c for c in np.typecodes["All"] if c not in "SUV"),
+        ">i4", ">c16", "S5", ">U3", "V5", ">M8[us]", "m8[3D]", "(2,3)i4",
+        "f8,f8,f8", ">i4,<f8", "O,i8", "U3,S2,M8[s]",
+        [("a", "i4"), ("b", [("c", "f8"), ("d", "u1", (3,))])],
+        {"names": ["f1"], "formats": ["u1"], "offsets": [1], "itemsize": 4},
+        {"names": ["x", "y"], "formats": ["i4", "i2"], "offsets": [0, 0]},
+        {"names": ["a"], "formats": ["i4"], "titles": ["T"]},
+        np.dtype((np.record, "i4,f8")), np.dtype("i8", metadata={"m": 1}),
+        np.dtypes.StringDType(), np.dtypes.StringDType(na_object=None),
+    ])
+    def test_cast_to_same_descriptor(self, dtype):
+        # Casting a descriptor to itself is a "no" cast and a view, so cast
+        # safety checks skip resolving such casts.
+        dtype = np.dtype(dtype)
+        cast = get_castingimpl(type(dtype), type(dtype))
+        safety, _, view_off = cast._resolve_descriptors((dtype, dtype))
+        assert safety & ~Casting.same_value == Casting.no
+        assert view_off == 0
+        arr = np.empty(2, dtype)
+        for casting in ["no", "equiv", "safe", "same_kind", "unsafe"]:
+            assert np.can_cast(dtype, dtype, casting=casting)
+            assert np.can_cast(arr, arr.dtype, casting=casting)
+
     @pytest.mark.parametrize("dtype", np.typecodes["All"])
     def test_object_casts_NULL_None_equivalence(self, dtype):
         # None to <other> casts may succeed or fail, but a NULL'ed array must

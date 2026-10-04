@@ -583,6 +583,9 @@ PyArray_GetCastInfo(
  * (I.e. if `object_arr.astype("S")` did _not_ inspect the objects, and the
  * user would have to guess the string length.)
  *
+ * A descriptor can always be cast to itself (the cast is a view), so that
+ * case is valid for any `casting` without looking up the cast.
+ *
  * @param casting the requested casting safety.
  * @param from The descriptor to cast from
  * @param to The descriptor to cast to (may be NULL)
@@ -594,6 +597,9 @@ NPY_NO_EXPORT int
 PyArray_CheckCastSafety(NPY_CASTING casting,
         PyArray_Descr *from, PyArray_Descr *to, PyArray_DTypeMeta *to_dtype)
 {
+    if (from == to) {
+        return 1;
+    }
     if (to != NULL) {
         to_dtype = NPY_DTYPE(to);
     }
