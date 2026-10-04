@@ -1138,6 +1138,17 @@ class TestCreation:
         d = np.zeros(10, dtype=[('k', object, 2)])
         assert_array_equal(d['k'], 0)
 
+    def test_empty_and_zeros_structured_obj(self):
+        # Object fields are None in new arrays, and 0 only if zero-filled
+        dt = np.dtype([('i', 'i4'), ('o', object, 2)])
+        e = np.empty(5, dtype=dt)
+        assert all(x is None for x in e['o'].flat)
+        assert all(x is None for x in np.empty_like(e)['o'].flat)
+        for z in [np.zeros(5, dtype=dt), np.zeros_like(e),
+                  np.zeros(5, dtype=dt).take([0, 3])]:
+            assert_array_equal(z['o'], 0)
+            assert_array_equal(z['i'], 0)
+
     def test_zeros_like_like_zeros(self):
         # test zeros_like returns the same as zeros
         for c in np.typecodes['All']:

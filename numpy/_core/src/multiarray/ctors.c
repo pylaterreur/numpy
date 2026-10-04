@@ -789,11 +789,15 @@ PyArray_NewFromDescr_int(
          *  array
          */
 
-        /* float errors do not matter and we do not release GIL */
+        /*
+         * float errors do not matter and we do not release GIL.  The loop is
+         * only needed to zero the array (getting it can be slow, e.g. it
+         * visits all fields of a structured dtype).
+         */
         NPY_ARRAYMETHOD_FLAGS zero_flags;
         PyArrayMethod_GetTraverseLoop *get_fill_zero_loop =
             NPY_DT_SLOTS(NPY_DTYPE(descr))->get_fill_zero_loop;
-        if (get_fill_zero_loop != NULL) {
+        if ((cflags & _NPY_ARRAY_ZEROED) && get_fill_zero_loop != NULL) {
             if (get_fill_zero_loop(
                     NULL, descr, 1, descr->elsize, &(fill_zero_info.func),
                     &(fill_zero_info.auxdata), &zero_flags) < 0) {
