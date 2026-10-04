@@ -13,6 +13,7 @@
 #include "numpy/npy_math.h"
 #include "numpy/halffloat.h"
 #include "lowlevel_strided_loops.h"
+#include "templ_common.h"
 
 
 
@@ -251,22 +252,20 @@ static void
 
 /**begin repeat
  *  #TYPE = LONGDOUBLE,
- *          FLOAT, DOUBLE, HALF,
+ *          FLOAT, DOUBLE,
  *          CFLOAT, CDOUBLE, CLONGDOUBLE,
  *          UBYTE, USHORT, UINT, ULONG, ULONGLONG,
  *          BYTE, SHORT, INT, LONG, LONGLONG#
  *  #typ = npy_longdouble,
- *         npy_float,npy_double,npy_half,
+ *         npy_float,npy_double,
  *         npy_cfloat, npy_cdouble, npy_clongdouble,
  *         npy_ubyte, npy_ushort, npy_uint, npy_ulong, npy_ulonglong,
  *         npy_byte, npy_short, npy_int, npy_long, npy_longlong#
- * #suff = , , , , f, , l, x*10#
- * #IS_COMPLEX = 0, 0, 0, 0, 1, 1, 1, 0*10#
- * #IS_HALF = 0, 0, 0, 1, 0*13#
- * #ROWWISE = 0, 1, 1, 0, 1, 1, 0, 1*10#
+ * #suff = , , , f, , l, x*10#
+ * #IS_COMPLEX = 0, 0, 0, 1, 1, 1, 0*10#
+ * #ROWWISE = 0, 1, 1, 1, 1, 0, 1*10#
  */
 
-#if !@IS_HALF@
 /* *op = 0 */
 static inline void
 @TYPE@_matmul_zero(@typ@ *op)
@@ -294,7 +293,6 @@ static inline void
     *op += val1 * val2;
 #endif
 }
-#endif
 
 #if @ROWWISE@
 /* op[p] += val1 * ip2[p] for p in range(dp) */
@@ -328,16 +326,6 @@ static inline @typ@
                   char *ip2, npy_intp is2_n, npy_intp dn)
 {
     npy_intp n;
-
-#if @IS_HALF@
-    float sum = 0;
-
-    for (n = 0; n < dn; n++, ip1 += is1_n, ip2 += is2_n) {
-        sum += npy_half_to_float(*(@typ@ *)ip1) *
-               npy_half_to_float(*(@typ@ *)ip2);
-    }
-    return npy_float_to_half(sum);
-#else
     @typ@ sum;
 
     @TYPE@_matmul_zero(&sum);
@@ -356,16 +344,15 @@ static inline @typ@
         @TYPE@_matmul_madd(&sum, *(@typ@ *)ip1, *(@typ@ *)ip2);
     }
     return sum;
-#endif
 }
 
 /*
  * Both loop orders below compute each output element the same way: start
  * from zero and add the products in order of increasing n.  The order of
- * the loops therefore does not change the result.  float16 (summed in
- * float) and the long double types only use the dot products: for x87 long
- * doubles, loading and storing the output elements in the inner loop costs
- * more than the better memory access pattern saves.
+ * the loops therefore does not change the result.  The long double types
+ * only use the dot products: for x87 long doubles, loading and storing the
+ * output elements in the inner loop costs more than the better memory access
+ * pattern saves.  float16 is done in float, see HALF_matmul below.
  */
 static NPY_GCC_OPT_3 void
 @TYPE@_matmul_inner_noblas(void *_ip1, npy_intp is1_m, npy_intp is1_n,
@@ -415,6 +402,179 @@ static NPY_GCC_OPT_3 void
 }
 
 /**end repeat**/
+
+/*
+ * float16 matmul sums the products in float, starting from zero in order of
+ * increasing n, like the float16 dot.  Rather than converting both factors
+ * of every product to float, convert ip2 once and each row of ip1 once, and
+ * compute the rows of the result in float: the same products are added up
+ * in the same order, so the result does not change, but the loops are short
+ * and can be vectorized.
+ */
+
+/* sum(ip1[n] * ip2[n] for n in range(dn)) in float, like the float16 dot */
+static inline npy_half
+HALF_matmul_dot(char *ip1, npy_intp is1_n, char *ip2, npy_intp is2_n,
+                npy_intp dn)
+{
+    float sum = 0;
+
+    for (npy_intp n = 0; n < dn; n++, ip1 += is1_n, ip2 += is2_n) {
+        sum += npy_half_to_float(*(npy_half *)ip1) *
+               npy_half_to_float(*(npy_half *)ip2);
+    }
+    return npy_float_to_half(sum);
+}
+
+/* dst[i] = (float)src[i * stride] for i in range(n) */
+static void
+half_to_float_strided(npy_float *dst, const char *src, npy_intp stride,
+                      npy_intp n)
+{
+    for (npy_intp i = 0; i < n; i++, src += stride) {
+        dst[i] = npy_half_to_float(*(const npy_half *)src);
+    }
+}
+
+/* dst[i * stride] = (half)src[i] for i in range(n) */
+static void
+float_to_half_strided(char *dst, npy_intp stride, const npy_float *src,
+                      npy_intp n)
+{
+    for (npy_intp i = 0; i < n; i++, dst += stride) {
+        *(npy_half *)dst = npy_float_to_half(src[i]);
+    }
+}
+
+/*
+ * `buf` holds ip2 as a C-contiguous float matrix (dn * dp floats), followed
+ * by a row of ip1 (dn floats) and a row of the result (dp floats).  ip2 is
+ * only converted if `convert_ip2` is set, so that it is converted once when
+ * it is the same for all matrices of a stack.
+ */
+static NPY_GCC_OPT_3 void
+HALF_matmul_inner_noblas(char *ip1, npy_intp is1_m, npy_intp is1_n,
+                         char *ip2, npy_intp is2_n, npy_intp is2_p,
+                         char *op, npy_intp os_m, npy_intp os_p,
+                         npy_intp dm, npy_intp dn, npy_intp dp,
+                         npy_float *buf, int convert_ip2)
+{
+    npy_float *b = buf, *a = buf + dn * dp, *c = a + dn;
+    npy_intp m, n, p;
+
+    if (convert_ip2) {
+        if (dp == 1) {
+            half_to_float_strided(b, ip2, is2_n, dn);
+        }
+        else {
+            for (n = 0; n < dn; n++, ip2 += is2_n) {
+                half_to_float_strided(b + n * dp, ip2, is2_p, dp);
+            }
+        }
+    }
+    for (m = 0; m < dm; m++, ip1 += is1_m, op += os_m) {
+        half_to_float_strided(a, ip1, is1_n, dn);
+        if (dp >= 8) {
+            /* add a[n] * b[n, :] to the row for each n, as for FLOAT */
+            for (p = 0; p < dp; p++) {
+                c[p] = 0;
+            }
+            for (n = 0; n < dn; n++) {
+                const npy_float a_n = a[n];
+                const npy_float *b_n = b + n * dp;
+
+                for (p = 0; p < dp; p++) {
+                    c[p] += a_n * b_n[p];
+                }
+            }
+        }
+        else {
+            for (p = 0; p < dp; p++) {
+                npy_float sum = 0;
+
+                for (n = 0; n < dn; n++) {
+                    sum += a[n] * b[n * dp + p];
+                }
+                c[p] = sum;
+            }
+        }
+        float_to_half_strided(op, os_p, c, dp);
+    }
+}
+
+NPY_NO_EXPORT void
+HALF_matmul(char **args, npy_intp const *dimensions, npy_intp const *steps,
+            void *NPY_UNUSED(func))
+{
+    npy_intp dOuter = *dimensions++;
+    npy_intp iOuter;
+    npy_intp s0 = *steps++;
+    npy_intp s1 = *steps++;
+    npy_intp s2 = *steps++;
+    npy_intp dm = dimensions[0];
+    npy_intp dn = dimensions[1];
+    npy_intp dp = dimensions[2];
+    npy_intp is1_m=steps[0], is1_n=steps[1], is2_n=steps[2], is2_p=steps[3],
+         os_m=steps[4], os_p=steps[5];
+    char *ip1 = args[0], *ip2 = args[1], *op = args[2];
+    /* small products do not need to allocate the buffer */
+    npy_float small_buf[256];
+    npy_float *buf = NULL;
+    npy_intp buf_size;
+    /*
+     * Converting the operands first saves dn * (2 * dm * dp - dm - dp)
+     * conversions.  If that is only a few (or none, for dot products, which
+     * use every value once), compute each element directly.
+     */
+    int direct = dm == 1 && dp == 1;
+
+    if (!direct && dm < 32 && dn < 32 && dp < 32) {
+        direct = dn * (2 * dm * dp - dm - dp) < 32;
+    }
+    if (direct) {
+        for (iOuter = 0; iOuter < dOuter; iOuter++,
+                             ip1 += s0, ip2 += s1, op += s2) {
+            char *ip1_m = ip1, *op_m = op;
+
+            for (npy_intp m = 0; m < dm; m++, ip1_m += is1_m, op_m += os_m) {
+                char *ip2_p = ip2, *op_p = op_m;
+
+                for (npy_intp p = 0; p < dp; p++,
+                                     ip2_p += is2_p, op_p += os_p) {
+                    *(npy_half *)op_p = HALF_matmul_dot(ip1_m, is1_n,
+                                                        ip2_p, is2_n, dn);
+                }
+            }
+        }
+        return;
+    }
+    if (dOuter == 0 || dm == 0 || dp == 0) {
+        return;
+    }
+    /* room for dn * dp + dn + dp floats */
+    if (!npy_mul_sizes_with_overflow(&buf_size, dn + 1, dp + 1) &&
+            !npy_mul_sizes_with_overflow(&buf_size, buf_size,
+                                         sizeof(npy_float))) {
+        buf = buf_size <= (npy_intp)sizeof(small_buf) ?
+                small_buf : (npy_float *)PyMem_RawMalloc(buf_size);
+    }
+    if (buf == NULL) {
+        PyGILState_STATE gil_state = PyGILState_Ensure();
+        PyErr_SetString(PyExc_MemoryError, "Out of memory in matmul");
+        PyGILState_Release(gil_state);
+        return;
+    }
+    for (iOuter = 0; iOuter < dOuter; iOuter++,
+                         ip1 += s0, ip2 += s1, op += s2) {
+        HALF_matmul_inner_noblas(ip1, is1_m, is1_n, ip2, is2_n, is2_p,
+                                 op, os_m, os_p, dm, dn, dp,
+                                 buf, iOuter == 0 || s1 != 0);
+    }
+    if (buf != small_buf) {
+        PyMem_RawFree(buf);
+    }
+}
+
 static void
 BOOL_matmul_inner_noblas(void *_ip1, npy_intp is1_m, npy_intp is1_n,
                            void *_ip2, npy_intp is2_n, npy_intp is2_p,
@@ -523,18 +683,18 @@ OBJECT_matmul_inner_noblas(void *_ip1, npy_intp is1_m, npy_intp is1_n,
 
 
 /**begin repeat
- *  #TYPE = FLOAT, DOUBLE, LONGDOUBLE, HALF,
+ *  #TYPE = FLOAT, DOUBLE, LONGDOUBLE,
  *          CFLOAT, CDOUBLE, CLONGDOUBLE,
  *          UBYTE, USHORT, UINT, ULONG, ULONGLONG,
  *          BYTE, SHORT, INT, LONG, LONGLONG,
  *          BOOL, OBJECT#
- *  #typ = npy_float,npy_double,npy_longdouble, npy_half,
+ *  #typ = npy_float,npy_double,npy_longdouble,
  *         npy_cfloat, npy_cdouble, npy_clongdouble,
  *         npy_ubyte, npy_ushort, npy_uint, npy_ulong, npy_ulonglong,
  *         npy_byte, npy_short, npy_int, npy_long, npy_longlong,
  *         npy_bool,npy_object#
- * #IS_COMPLEX = 0, 0, 0, 0, 1, 1, 1, 0*12#
- * #USEBLAS = 1, 1, 0, 0, 1, 1, 0*13#
+ * #IS_COMPLEX = 0, 0, 0, 1, 1, 1, 0*12#
+ * #USEBLAS = 1, 1, 0, 1, 1, 0*13#
  */
 
 

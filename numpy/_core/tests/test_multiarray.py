@@ -8732,6 +8732,41 @@ class TestMatmul(MatmulCommon):
         for w_, a_ in itertools.product(self._layouts(w), self._layouts(a)):
             assert_equal(self.matmul(w_, a_), np.dot(w, a))
 
+    # float16 matmul sums the products in float32 in order, as np.dot does,
+    # either directly or from operands converted to float32 first
+    @pytest.mark.parametrize("shape", [
+        (2, 2, 2), (1, 40, 1), (3, 5, 4), (1, 7, 9), (9, 7, 1), (9, 17, 7),
+        (9, 17, 33), (40, 1, 40),
+    ])
+    def test_float16_like_dot(self, shape):
+        m, n, p = shape
+        rng = np.random.default_rng(16)
+        a = (rng.standard_normal((3, m, n)) * 3).astype(np.float16)
+        b = (rng.standard_normal((3, n, p)) * 3).astype(np.float16)
+        expected = np.dot(a[0], b[0]).view(np.uint16)
+        for a_, b_ in itertools.product(self._layouts(a[0]),
+                                        self._layouts(b[0])):
+            assert_array_equal(self.matmul(a_, b_).view(np.uint16), expected)
+        for out in self._layouts(np.ones((m, p), dtype=np.float16)):
+            assert self.matmul(a[0], b[0], out=out) is out
+            assert_array_equal(out.view(np.uint16), expected)
+        # stacks, also with one operand repeated along the stack (stride 0)
+        for a_, b_ in [(a, b), (a, b[0]), (a[0], b), (a[:, ::-1], b[::-1])]:
+            a3 = np.broadcast_to(a_, (3, m, n))
+            b3 = np.broadcast_to(b_, (3, n, p))
+            expected = np.array([np.dot(x, y) for x, y in zip(a3, b3)])
+            assert_array_equal(self.matmul(a_, b_).view(np.uint16),
+                               expected.view(np.uint16))
+
+    @pytest.mark.parametrize("shape", [(1, 4, 1), (2, 8, 2), (9, 40, 9)])
+    def test_float16_sums_in_float32(self, shape):
+        # partial sums may exceed the largest float16 (65504)
+        m, n, p = shape
+        a = np.tile(np.array([6e4, 6e4, -6e4, -6e4], np.float16), (m, n // 4))
+        b = np.ones((n, p), dtype=np.float16)
+        with np.errstate(all="raise"):
+            assert_equal(self.matmul(a, b), np.zeros((m, p), np.float16))
+
     def test_matmul_object(self):
         import fractions
 

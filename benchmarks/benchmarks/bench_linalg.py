@@ -289,6 +289,7 @@ class MatmulNoBlas(Benchmark):
         self.a = rng.integers(0, 10, (size, size)).astype(dtype)
         self.b = rng.integers(0, 10, (size, size)).astype(dtype)
         self.v = rng.integers(0, 10, size).astype(dtype)
+        self.stack = rng.integers(0, 10, (16, 8, size)).astype(dtype)
 
     def time_matmul(self, dtype, size):
         np.matmul(self.a, self.b)
@@ -298,3 +299,10 @@ class MatmulNoBlas(Benchmark):
 
     def time_matvec(self, dtype, size):
         np.matmul(self.a, self.v)
+
+    def time_vecmat(self, dtype, size):
+        np.matmul(self.v, self.a)
+
+    def time_matmul_stack(self, dtype, size):
+        # a stack of matrices times the same matrix
+        np.matmul(self.stack, self.b)
