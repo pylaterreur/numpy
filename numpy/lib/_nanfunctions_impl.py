@@ -97,7 +97,7 @@ def _replace_nan(a, val):
     """
     a = np.asanyarray(a)
 
-    if a.dtype == np.object_:
+    if a.dtype.type is np.object_:
         # object arrays do not support `isnan` (gh-9009), so make a guess
         mask = np.not_equal(a, a, dtype=bool)
     elif issubclass(a.dtype.type, np.inexact):
@@ -1021,6 +1021,9 @@ def nanmean(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
     higher-precision accumulator using the `dtype` keyword can alleviate
     this issue.
 
+    By default, `float16` results are computed using `float32` intermediates
+    for extra precision.
+
     Examples
     --------
     >>> import numpy as np
@@ -1038,10 +1041,17 @@ def nanmean(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
         return np.mean(arr, axis=axis, dtype=dtype, out=out, keepdims=keepdims,
                        where=where)
 
-    if dtype is not None:
+    if dtype is None:
+        # Like mean, compute float16 in float32, as float16 sums easily
+        # overflow.
+        is_float16_result = arr.dtype.type is _nx.float16
+        if is_float16_result:
+            dtype = _nx.float32
+    else:
+        is_float16_result = False
         dtype = np.dtype(dtype)
-    if dtype is not None and not issubclass(dtype.type, np.inexact):
-        raise TypeError("If a is inexact, then dtype must be inexact")
+        if not issubclass(dtype.type, np.inexact):
+            raise TypeError("If a is inexact, then dtype must be inexact")
     if out is not None and not issubclass(out.dtype.type, np.inexact):
         raise TypeError("If a is inexact, then out must be inexact")
 
@@ -1050,6 +1060,8 @@ def nanmean(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
     tot = np.sum(arr, axis=axis, dtype=dtype, out=out, keepdims=keepdims,
                  where=where)
     avg = _divide_by_count(tot, cnt, out=out)
+    if is_float16_result and out is None:
+        avg = _nx.float16(avg)
 
     isbad = (cnt == 0)
     if isbad.any():
@@ -1786,6 +1798,9 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
     below).  Specifying a higher-accuracy accumulator using the ``dtype``
     keyword can alleviate this issue.
 
+    By default, `float16` results are computed using `float32` intermediates
+    for extra precision.
+
     For this function to work on sub-classes of ndarray, they must define
     `sum` with the kwarg `keepdims`
 
@@ -1807,10 +1822,18 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
                       keepdims=keepdims, where=where, mean=mean,
                       correction=correction)
 
-    if dtype is not None:
+    arr_type = arr.dtype.type
+    if dtype is None:
+        # Like var, compute float16 in float32, as float16 sums and squares
+        # easily overflow.
+        is_float16_result = arr_type is _nx.float16
+        if is_float16_result:
+            dtype = _nx.float32
+    else:
+        is_float16_result = False
         dtype = np.dtype(dtype)
-    if dtype is not None and not issubclass(dtype.type, np.inexact):
-        raise TypeError("If a is inexact, then dtype must be inexact")
+        if not issubclass(dtype.type, np.inexact):
+            raise TypeError("If a is inexact, then dtype must be inexact")
     if out is not None and not issubclass(out.dtype.type, np.inexact):
         raise TypeError("If a is inexact, then out must be inexact")
 
@@ -1844,9 +1867,11 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
         avg = _divide_by_count(avg, cnt)
 
     # Compute squared deviation from mean.
+    if is_float16_result:
+        arr = arr.astype(dtype)
     np.subtract(arr, avg, out=arr, casting='unsafe', where=where)
     arr = _copyto(arr, 0, mask)
-    if issubclass(arr.dtype.type, np.complexfloating):
+    if issubclass(arr_type, np.complexfloating):
         sqr = np.multiply(arr, arr.conj(), out=arr, where=where).real
     else:
         sqr = np.multiply(arr, arr, out=arr, where=where)
@@ -1873,6 +1898,8 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
         # NaN, inf, or negative numbers are all possible bad
         # values, so explicitly replace them with NaN.
         var = _copyto(var, np.nan, isbad)
+    if is_float16_result and out is None:
+        var = _nx.float16(var)
     return var
 
 
@@ -1983,6 +2010,9 @@ def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
     the results to be inaccurate, especially for float32 (see example
     below).  Specifying a higher-accuracy accumulator using the `dtype`
     keyword can alleviate this issue.
+
+    By default, `float16` results are computed using `float32` intermediates
+    for extra precision.
 
     Examples
     --------

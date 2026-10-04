@@ -830,6 +830,33 @@ class TestNanFunctions_MeanVarStd(SharedNanFunctionsTestsMixin):
         assert std_old.shape == mean.shape
         assert_almost_equal(std, std_old)
 
+    @pytest.mark.parametrize(("nanfunc", "func", "expected"), [
+        (np.nanmean, np.mean, 2), (np.nanvar, np.var, 1), (np.nanstd, np.std, 1),
+    ])
+    def test_float16_sums(self, nanfunc, func, expected):
+        # Like mean, var and std, these compute float16 in float32: in
+        # float16, the sums of 100000 elements overflow (gh-23075), and
+        # the sums along axis 0 stop growing at 2048.
+        a = np.ones(100000, dtype=np.float16)
+        a[::2] = 3
+        a[-1] = np.nan
+        for res in [nanfunc(a), nanfunc(np.stack([a, a], axis=1), axis=0)]:
+            assert res.dtype == np.float16
+            assert_equal(res, expected)
+        assert_equal(nanfunc(a), func(a[:-1]))
+
+    @pytest.mark.parametrize(("nanfunc", "func", "expected"), [
+        (np.nanvar, np.var, 90), (np.nanstd, np.std, np.sqrt(np.float16(90))),
+    ])
+    def test_float16_squares(self, nanfunc, func, expected):
+        # The square of the deviation of 300 overflows float16.
+        a = np.zeros(1000, dtype=np.float16)
+        a[:2] = [300, np.nan]
+        res = nanfunc(a)
+        assert res.dtype == np.float16
+        assert_equal(res, expected)
+        assert_equal(res, func(a[~np.isnan(a)]))
+
 
 _TIME_UNITS = (
     "Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"
