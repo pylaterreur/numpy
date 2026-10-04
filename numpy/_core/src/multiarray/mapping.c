@@ -1999,6 +1999,9 @@ array_assign_subscript(PyArrayObject *self, PyObject *ind, PyObject *op)
 
     if (tmp_arr && solve_may_share_memory(self, tmp_arr, 1) != 0) {
         Py_SETREF(tmp_arr, (PyArrayObject *)PyArray_NewCopy(tmp_arr, NPY_ANYORDER));
+        if (tmp_arr == NULL) {
+            goto fail;
+        }
     }
     for (i = 0; i < index_num; ++i) {
         if (indices[i].object != NULL && PyArray_Check(indices[i].object) &&

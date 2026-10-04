@@ -185,6 +185,21 @@ class TestIndexing:
         a[2:][None, a[:-2]] = 3
         assert_equal(a, expected)
 
+    def test_gh_26542_copy_error(self):
+        # Values that may share memory with the array are copied first; an
+        # error during that copy must stop the assignment
+        class RaiseOnCopy(np.ndarray):
+            def __array_finalize__(self, obj):
+                if getattr(obj, "raise_on_copy", False):
+                    raise RuntimeError("copy failed")
+
+        a = np.arange(4)
+        values = a[::-1].view(RaiseOnCopy)
+        values.raise_on_copy = True
+        with pytest.raises(RuntimeError, match="copy failed"):
+            a[[0, 1, 2, 3]] = values
+        assert_array_equal(a, np.arange(4))
+
     def test_ellipsis_index(self):
         a = np.array([[1, 2, 3],
                       [4, 5, 6],
