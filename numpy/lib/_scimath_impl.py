@@ -28,6 +28,9 @@ __all__ = [
 
 _ln2 = nx.log(2.0)
 
+# The Python scalar types, which are weakly typed in promotion (NEP 50)
+_weak_scalar_types = frozenset((int, float, complex))
+
 # The input types that _tocomplex converts to csingle and to clongdouble
 _csingle_types = (nt.half, nt.single, nt.byte, nt.short, nt.ubyte, nt.ushort,
                   nt.csingle)
@@ -131,34 +134,6 @@ def _fix_real_lt_zero(x):
     x = asarray(x)
     if any(isreal(x) & (x < 0)):
         x = _tocomplex(x)
-    return x
-
-
-def _fix_int_lt_zero(x):
-    """Convert `x` to double if it has real, negative components.
-
-    Otherwise, output is just the array version of the input (via asarray).
-
-    Parameters
-    ----------
-    x : array_like
-
-    Returns
-    -------
-    array
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> np.lib.scimath._fix_int_lt_zero([1,2])
-    array([1, 2])
-
-    >>> np.lib.scimath._fix_int_lt_zero([-1,2])
-    array([-1.,  2.])
-    """
-    x = asarray(x)
-    if any(isreal(x) & (x < 0)):
-        x = x * 1.0
     return x
 
 
@@ -498,8 +473,28 @@ def power(x, p):
     array([ 4, 256])
 
     """
-    x = _fix_real_lt_zero(x)
-    p = _fix_int_lt_zero(p)
+    # Python scalars are weakly typed in `numpy.power` (NEP 50), so keep
+    # them rather than converting them to arrays, which would make, e.g.,
+    # float32 input give float64 output.  Negative `p` must not be integer,
+    # as integers cannot be raised to negative integer powers.
+    weak_p = type(p) in _weak_scalar_types
+    if not weak_p:
+        p = asarray(p)
+        if any(isreal(p) & (p < 0)):
+            p = p * 1.0
+    elif type(p) is int and p < 0:
+        p = float(p)
+    if type(x) in _weak_scalar_types:
+        if type(x) is not complex and x < 0:
+            x = complex(x)
+    else:
+        x = asarray(x)
+        if any(isreal(x) & (x < 0)):
+            if weak_p:
+                # Match the precision of x**p, which is float64 for, e.g.,
+                # int8 `x` and p=0.5.
+                x = x.astype(nx.result_type(x, p), copy=False)
+            x = _tocomplex(x)
     return nx.power(x, p)
 
 

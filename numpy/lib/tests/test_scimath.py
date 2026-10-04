@@ -120,3 +120,65 @@ class TestRealResult:
         expected = np.power(x, n)
         assert res.dtype == expected.dtype
         assert_equal(res, expected)
+
+
+class TestPowerPromotion:
+    # Like in np.power, Python scalars are weakly typed (NEP 50), so that,
+    # e.g., float32 ** 0.5 is float32 (and complex64 for negative bases).
+
+    @pytest.mark.parametrize("p", [
+        2, 0.5, -2, -0.5, 2j, np.float32(0.5), np.int16(2),
+        np.array([2, 0.5], dtype=np.float32),
+    ], ids=repr)
+    @pytest.mark.parametrize("x", [
+        *(np.array([4, 9], dtype=dtype) for dtype in [
+            np.int8, np.uint8, np.int64, np.float16, np.float32, np.float64,
+            np.longdouble, np.complex64]),
+        np.int8(4), np.float32(4), 4, 4.0, 4 + 0j,
+    ], ids=repr)
+    def test_like_power(self, x, p):
+        res = np.emath.power(x, p)
+        # Integers cannot be raised to negative integer powers.
+        expected = np.power(x, float(p) if type(p) is int and p < 0 else p)
+        assert type(res) is type(expected)
+        assert res.dtype == expected.dtype
+        assert_equal(res, expected)
+
+    @pytest.mark.parametrize(("x", "p", "cdtype"), [
+        (np.array([-4, 4], dtype=np.float32), 0.5, np.complex64),
+        (np.array([-4, 4], dtype=np.float32), 2, np.complex64),
+        (np.array([-4, 4], dtype=np.float32), -2, np.complex64),
+        (np.array([-4, 4], dtype=np.float32), np.float64(0.5), np.complex128),
+        (np.array([-4, 4], dtype=np.float16), 0.5, np.complex64),
+        (np.array([-4, 4], dtype=np.float64), 0.5, np.complex128),
+        (np.array([-4, 4], dtype=np.longdouble), 0.5, np.clongdouble),
+        (np.array([-4, 4], dtype=np.complex64), 0.5, np.complex64),
+        (np.array([-4, 4], dtype=np.int8), 2, np.complex64),
+        # Like np.power(int8, 0.5), which is float64.
+        (np.array([-4, 4], dtype=np.int8), 0.5, np.complex128),
+        (np.array([-4, 4], dtype=np.int64), 0.5, np.complex128),
+        (np.float32(-4), 0.5, np.complex64),
+        (-4, np.float32(0.5), np.complex64),
+        (-4.0, np.array([0.5, 2], dtype=np.float32), np.complex64),
+        (-4, 0.5, np.complex128),
+        (-4, 2, np.complex128),
+    ], ids=repr)
+    def test_negative_base(self, x, p, cdtype):
+        res = np.emath.power(x, p)
+        assert res.dtype == cdtype
+        assert_equal(res, np.power(np.asarray(x).astype(cdtype), p))
+        if np.ndim(x) == np.ndim(p) == 0:
+            assert type(res) is cdtype
+
+    @pytest.mark.parametrize(("x", "p", "expected"), [
+        (np.array([2, 4]), np.array([-1, 2]), np.array([0.5, 16])),
+        (np.array([2, 4], dtype=np.int8), -1, np.array([0.5, 0.25])),
+        (2, np.int8(-1), np.float64(0.5)),
+    ], ids=repr)
+    def test_negative_integer_exponent(self, x, p, expected):
+        # Integers cannot be raised to negative integer powers, so these
+        # exponents are made float.
+        res = np.emath.power(x, p)
+        assert type(res) is type(expected)
+        assert res.dtype == expected.dtype
+        assert_equal(res, expected)
